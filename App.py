@@ -1,4 +1,4 @@
-        import streamlit as st
+  import streamlit as st
 import os
 import tempfile
 from pathlib import Path
@@ -116,3 +116,4 @@ if st.button("START SYNC", type="primary"):
                     st.error(f"Gemini Error: {e}")
             else:
                 st.error("Failed to extract audio. Site may be blocked.")
+ 
