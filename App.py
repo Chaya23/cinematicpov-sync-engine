@@ -1,4 +1,4 @@
-    import streamlit as st
+import streamlit as st
 import os, tempfile
 from openai import OpenAI
 import google.generativeai as genai
