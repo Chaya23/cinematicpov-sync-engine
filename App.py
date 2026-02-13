@@ -1,20 +1,19 @@
-import streamlit as st
+    import streamlit as st
 import os, tempfile
 from openai import OpenAI
 import google.generativeai as genai
 import yt_dlp
 from pydub import AudioSegment
 
-# --- 1. SETTINGS & AUTH (NO SPACES BEFORE THIS LINE) ---
-st.set_page_config(page_title="CinematicPOV Sync v10.6", layout="wide")
+# --- 1. SETUP & AUTH ---
+st.set_page_config(page_title="CinematicPOV Sync v10.7", layout="wide")
 
-# Safe Secret Loading
 try:
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
     proxy_url = st.secrets.get("PROXY_URL") 
 except Exception as e:
-    st.error("Missing API Keys in Streamlit Secrets.")
+    st.error("Missing API Keys in Secrets.")
     st.stop()
 
 # --- 2. TRANSCRIPTION ENGINE ---
@@ -35,11 +34,10 @@ def get_transcript(file_path):
             progress_bar.progress((i + 1) / len(chunks))
     return full_text
 
-# --- 3. THE STEALTH DOWNLOADER ---
+# --- 3. DOWNLOADER ---
 def download_audio(url, tmp_dir):
     out_path = os.path.join(tmp_dir, "audio.%(ext)s")
     cookie_path = "cookies.txt" if os.path.exists("cookies.txt") else None
-    
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': out_path,
@@ -47,9 +45,7 @@ def download_audio(url, tmp_dir):
         'proxy': proxy_url,
         'geo_bypass': True,
         'cookiefile': cookie_path,
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        },
+        'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0 Safari/537.36'},
         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '128'}],
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -57,12 +53,12 @@ def download_audio(url, tmp_dir):
     return os.path.join(tmp_dir, "audio.mp3")
 
 # --- 4. MAIN UI ---
-st.title("🎬 CinematicPOV Sync Engine v10.6")
+st.title("🎬 CinematicPOV Sync Engine v10.7")
 
 col1, col2 = st.columns(2)
 with col1:
     url_input = st.text_input("Link (YouTube/Disney/Solar):")
-    uploaded = st.file_uploader("OR Upload File Directly:", type=['mp3', 'mp4', 'm4a'])
+    uploaded = st.file_uploader("OR Upload File:", type=['mp3', 'mp4', 'm4a'])
 with col2:
     chars = ["Roman", "Billie", "Justin", "Winter", "Milo", "Giada"]
     pov_char = st.selectbox("Select Character POV:", chars + ["Custom..."])
@@ -72,7 +68,6 @@ with col2:
 if st.button("🔥 START SYNC", type="primary"):
     with tempfile.TemporaryDirectory() as tmp_dir:
         try:
-            # Step 1: Handle Input
             if uploaded:
                 path = os.path.join(tmp_dir, "in.mp3")
                 with open(path, "wb") as f: f.write(uploaded.getbuffer())
@@ -82,18 +77,21 @@ if st.button("🔥 START SYNC", type="primary"):
                 st.error("No source provided!")
                 st.stop()
 
-            # Step 2: Transcribe
             st.info("🎤 Transcribing full episode...")
             raw_text = get_transcript(path)
             
-            # Step 3: AI Character Mapping & POV
-            st.info("🧠 Analyzing Characters (LaughingPlace Grounding)...")
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            st.info("🧠 Syncing with 2026 Gemini Engine...")
+            
+            # --- UPDATED MODEL SELECTION ---
+            # Trying 2.0-flash which is the current 2026 workhorse
+            try:
+                model = genai.GenerativeModel('gemini-2.0-flash')
+            except:
+                model = genai.GenerativeModel('gemini-pro') # Fallback
             
             prompt = f"""
-            Identify the characters in this transcript: {raw_text}
-            Grounding: Roman made the Lacey vase, Billie got the Staten Island makeover, Milo wants the monkey.
-            
+            Identify characters in this transcript: {raw_text}
+            Grounding facts: Roman made the Lacey vase, Billie got the Staten Island makeover, Milo wants the monkey.
             1. Provide a FULL Labeled Transcript (Name: Dialogue).
             2. Write a 1st-person POV chapter for {pov_char}.
             
@@ -112,8 +110,7 @@ if st.button("🔥 START SYNC", type="primary"):
             st.success("Sync Complete!")
 
         except Exception as e:
-            st.error(f"Sync Interrupted: {e}")
-            st.info("💡 If this is a Download Error, please upload the MP3 file directly.")
+            st.error(f"Error: {e}")
 
 # --- 5. TABS ---
 t1, t2 = st.tabs(["📖 Character Novel", "📝 Labeled Transcript"])
