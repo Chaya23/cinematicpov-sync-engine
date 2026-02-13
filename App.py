@@ -1,4 +1,4 @@
-  import streamlit as st
+      import streamlit as st
 import os, tempfile
 from openai import OpenAI
 import google.generativeai as genai
@@ -76,81 +76,5 @@ st.info("Bypassing IP blocks and grounding with LaughingPlace recaps.")
 
 col1, col2 = st.columns(2)
 with col1:
-    url_input = st.text_input("Paste Link (YouTube/Disney/Solar):")
-    uploaded = st.file_uploader("OR Upload Full Episode Audio:", type=['mp3', 'mp4', 'm4a'])
-with col2:
-    chars = ["Roman", "Billie", "Justin", "Winter", "Milo", "Giada"]
-    pov_char = st.selectbox("Select Character POV:", chars + ["Custom..."])
-    if pov_char == "Custom...":
-        pov_char = st.text_input("Enter Character Name:")
-
-if st.button("🔥 START FULL SYNC", type="primary"):
-    if not url_input and not uploaded:
-        st.warning("Please provide a source!")
-        st.stop()
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        try:
-            # Step 1: Get Audio
-            with st.spinner("Downloading/Loading Audio..."):
-                if uploaded:
-                    path = os.path.join(tmp_dir, "input.mp3")
-                    with open(path, "wb") as f: f.write(uploaded.getbuffer())
-                else:
-                    path = download_stealth(url_input, tmp_dir)
-
-            # Step 2: Transcribe
-            full_raw_text = get_transcript(path)
-            
-            # Step 3: AI Processing with Grounding
-            st.spinner("🧠 Analyzing Characters & Writing POV...")
-            model = genai.GenerativeModel('gemini-1.5-flash') # Or 'gemini-2.5-flash' if available in your region
-            
-            prompt = f"""
-            You are a creative writer and 'Wizards Beyond Waverly Place' expert.
-            
-            CONTEXT: Use your internal search knowledge of 'LaughingPlace' recaps for this show.
-            FACTS: Roman made the 'Lacey' vase. Milo wants the monkey. Billie gets the Staten Island makeover. 
-            The theme song and plot must match exactly.
-            
-            TRANSCRIPT: {full_raw_text}
-            
-            TASK:
-            1. Create a FULL Labeled Transcript (Character: "Dialogue").
-            2. Write a detailed first-person POV novel chapter for {pov_char} covering the whole episode.
-            
-            FORMAT:
-            ---TRANSCRIPT_START---
-            [Labeled Transcript]
-            ---POV_START---
-            [Novel Chapter]
-            """
-            
-            res = model.generate_content(prompt)
-            output_text = res.text
-            
-            # Parsing Results
-            if "---POV_START---" in output_text:
-                parts = output_text.split("---POV_START---")
-                st.session_state.labeled = parts[0].replace("---TRANSCRIPT_START---", "")
-                st.session_state.story = parts[1]
-            else:
-                st.session_state.story = output_text
-                st.session_state.labeled = "AI failed to split transcript. Check full result below."
-            
-            st.success("✅ Sync Successful!")
-
-        except Exception as e:
-            st.error(f"DOWNLOAD ERROR: Disney/Solar is still blocking. {e}")
-            st.info("💡 FIX: Use a residential proxy in Secrets or upload the file manually.")
-
-# --- 5. RESULTS ---
-t1, t2 = st.tabs(["📖 Character Novel", "📝 Labeled Transcript"])
-
-if "story" in st.session_state:
-    with t1:
-        st.markdown(f"## {pov_char}'s Story")
-        st.write(st.session_state.story)
-        st.download_button("Download Story", st.session_state.story, "story.txt")
-    with t2:
-        st.text_area("Full Labeled Transcript (Copy-Paste):", st.session_state.labeled, height=500)
+    url_input = st
+    
