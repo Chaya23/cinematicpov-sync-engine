@@ -6,39 +6,39 @@ from docx import Document
 from io import BytesIO
 import yt_dlp
 
-# --- 1. SETUP ---
-st.set_page_config(page_title="CinematicPOV Fusion v16.9", layout="wide", page_icon="🎬")
+# --- 1. SETUP & AUTH ---
+st.set_page_config(page_title="CinematicPOV Fusion v17.0", layout="wide", page_icon="🎬")
 
 if "GOOGLE_API_KEY" not in st.secrets or "OPENAI_API_KEY" not in st.secrets:
-    st.error("Check your Secrets for API keys!")
+    st.error("Missing API Keys! Check your Streamlit Secrets.")
     st.stop()
 
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 client_oa = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# --- 2. THE MULTI-DOWNLOADER (SCRIPT + NOVEL) ---
+# --- 2. WORD DOCUMENT ENGINE ---
 def create_master_docx(transcript, chapter, pov_name):
-    """Creates a Word Doc with the full verbatim script followed by the novel."""
+    """Creates a high-quality Word doc with Transcript + Novel."""
     doc = Document()
-    doc.add_heading('OFFICIAL EPISODE ARCHIVE', 0)
+    doc.add_heading('CINEMATIC POV: MASTER ARCHIVE', 0)
     
-    # Transcript Section
-    doc.add_heading('Verbatim Speaker-Identified Transcript', level=1)
+    # Transcript with Speaker IDs
+    doc.add_heading('Official Speaker-Identified Transcript', level=1)
     doc.add_paragraph(transcript)
     
     doc.add_page_break()
     
-    # Novel Section
-    doc.add_heading(f'Chapter Novelization: {pov_name}\'s POV', level=1)
+    # The Novel Chapter
+    doc.add_heading(f'Novelization: {pov_name}\'s POV', level=1)
     doc.add_paragraph(chapter)
     
     bio = BytesIO()
     doc.save(bio)
     return bio.getvalue()
 
-# --- 3. CORE ENGINES ---
+# --- 3. VIDEO & AUDIO TOOLS ---
 def download_video(url, tmp_dir):
-    """Bypasses blocks on YouTube/Disney/Solar by spoofing a browser."""
+    """Bypasses blocks using stealth browser headers."""
     out_path = os.path.join(tmp_dir, "episode.%(ext)s")
     ydl_opts = {
         'format': 'bestvideo[height<=480]+bestaudio/best', 
@@ -54,97 +54,131 @@ def download_video(url, tmp_dir):
         if f.startswith("episode"): return os.path.join(tmp_dir, f)
     return None
 
-def get_model():
-    """Finds the current working Gemini Flash ID to avoid 404s."""
+def extract_audio(video_path, tmp_dir):
+    """Converts video to mono audio for Whisper."""
+    audio_path = os.path.join(tmp_dir, "audio.mp3")
+    subprocess.run(f"ffmpeg -i '{video_path}' -ar 16000 -ac 1 -map a '{audio_path}' -y", shell=True, capture_output=True)
+    return audio_path
+
+# --- 4. MODEL RESOLVER ---
+def get_safe_model():
+    """Detects available Gemini model name to avoid 404s."""
     try:
         models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
         return next((m for m in models if "flash" in m), "gemini-1.5-flash")
     except: return "gemini-1.5-flash"
 
-# --- 4. THE STUDIO UI ---
+# --- 5. SIDEBAR CONFIG ---
 with st.sidebar:
-    st.header("🎭 Character Manager")
-    cast_names = st.text_area("Cast Members:", "Roman, Billie, Justin, Winter, Milo, Giada")
-    pov_char = st.selectbox("POV for Novel:", [c.strip() for c in cast_names.split(",")])
+    st.header("🎭 Character Studio")
+    cast_input = st.text_area("Cast Members (Edit):", "Roman, Billie, Justin, Winter, Milo, Giada")
+    pov_char = st.selectbox("Novel POV:", [c.strip() for c in cast_input.split(",")])
     st.divider()
-    st.info("v16.9: Full Speaker Attribution + Word Export")
+    st.info("Fusion v17.0: Fixed Safety Filters & Word Export")
 
-st.title("🎬 CinematicPOV Fusion v16.9")
-url = st.text_input("Enter Episode URL (DisneyNow, SolarMovie, YouTube):")
-upload = st.file_uploader("OR Upload Video File:", type=['mp4', 'webm', 'mkv'])
+# --- 6. MAIN INTERFACE ---
+st.title("🎬 CinematicPOV Fusion v17.0")
+url_input = st.text_input("Episode URL (Disney/Solar/YT):")
+uploaded = st.file_uploader("OR Upload Video:", type=['mp4', 'webm', 'mkv'])
 
 if st.button("🚀 EXECUTE FULL FUSION", type="primary"):
     with tempfile.TemporaryDirectory() as tmp_dir:
         # Acquisition
-        v_path = ""
-        if upload:
-            v_path = os.path.join(tmp_dir, upload.name)
-            with open(v_path, "wb") as f: f.write(upload.getbuffer())
+        video_path = ""
+        if uploaded:
+            video_path = os.path.join(tmp_dir, uploaded.name)
+            with open(video_path, "wb") as f: f.write(uploaded.getbuffer())
         else:
-            st.info("🕵️ Accessing Video Source...")
-            v_path = download_video(url, tmp_dir)
+            st.info("🕵️ Accessing Video...")
+            video_path = download_video(url_input, tmp_dir)
 
-        if not v_path:
-            st.error("Could not reach video. Please upload the file directly.")
+        if not video_path:
+            st.error("Access denied by host. Please upload the file directly.")
             st.stop()
 
-        # Step 1: Whisper (Accurate Text)
-        st.info("👂 Whisper: Transcribing every word...")
-        audio = os.path.join(tmp_dir, "a.mp3")
-        subprocess.run(f"ffmpeg -i '{v_path}' -ar 16000 -ac 1 -map a '{audio}' -y", shell=True, capture_output=True)
-        with open(audio, "rb") as f_a:
-            raw_t = client_oa.audio.transcriptions.create(model="whisper-1", file=f_a, response_format="text")
+        # Step 1: Whisper Transcription
+        st.info("👂 Whisper: Transcribing dialogue...")
+        audio_path = extract_audio(video_path, tmp_dir)
+        with open(audio_path, "rb") as f_a:
+            transcript_raw = client_oa.audio.transcriptions.create(model="whisper-1", file=f_a, response_format="text")
 
-        # Step 2: Gemini Vision (Speaker Identification)
-        st.info("☁️ Gemini: Watching for Speaker ID...")
-        vf = genai.upload_file(path=v_path)
-        while vf.state.name == "PROCESSING": time.sleep(2); vf = genai.get_file(vf.name)
+        # Step 2: Gemini Vision Analysis
+        st.info("☁️ Gemini: Processing Video...")
+        video_file = genai.upload_file(path=video_path)
+        while video_file.state.name == "PROCESSING":
+            time.sleep(2)
+            video_file = genai.get_file(video_file.name)
 
-        # Step 3: The Fusion
-        st.info(f"✍️ Syncing Transcript & Writing {pov_char}'s POV...")
-        model = genai.GenerativeModel(get_model())
-        prompt = f"""
-        TRANSCRIPT: {raw_t}
-        CAST: {cast_names}
+        # Step 3: The Fusion (With Safety Fix)
+        st.info(f"✍️ Authoring {pov_char}'s POV...")
         
+        # New: Safety Guardrail Fix
+        safety = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
+
+        model = genai.GenerativeModel(get_safe_model())
+        
+        prompt = f"""
+        CAST: {cast_input}
+        WHISPER DIALOGUE: {transcript_raw}
+        
+        This is a fictional, family-friendly Disney sitcom novelization. 
         TASK:
-        1. LINE-BY-LINE SCRIPT: Identify the speaker for every single line of the transcript. Format as [NAME]: [Dialogue].
+        1. LINE-BY-LINE TRANSCRIPT: Watch the video and identify who said every line from the Whisper dialogue. 
+           Format: [NAME]: [Dialogue]. (e.g., ROMAN: I felt a surge of magic.)
         2. NOVEL CHAPTER: Write a YA chapter from {pov_char}'s POV. 
-           Include his deep internal thoughts and reactions to what others are saying. 
-           Stick to the exact dialogue provided in the transcript.
+           Use the EXACT dialogue. Describe the internal thoughts behind every interaction.
         
         FORMAT:
         ---SCRIPT_START---
-        [Complete Speaker Script]
+        [Full Transcript]
         ---NOVEL_START---
         [Full Chapter]
         """
-        res = model.generate_content([vf, prompt])
-        genai.delete_file(vf.name)
+        
+        try:
+            res = model.generate_content([video_file, prompt], safety_settings=safety)
+            genai.delete_file(video_file.name)
+            
+            # Check for block before parsing
+            if not res.candidates or not res.candidates[0].content.parts:
+                st.error("🚫 Gemini blocked the output due to safety filters. Try a shorter clip or simpler scene.")
+                st.stop()
 
-        if "---NOVEL_START---" in res.text:
-            parts = res.text.split("---NOVEL_START---")
-            st.session_state.final_script = parts[0].replace("---SCRIPT_START---", "").strip()
-            st.session_state.final_novel = parts[1].strip()
-            st.success("✅ Fusion Complete!")
+            if "---NOVEL_START---" in res.text:
+                parts = res.text.split("---NOVEL_START---")
+                st.session_state.s_out = parts[0].replace("---SCRIPT_START---", "").strip()
+                st.session_state.n_out = parts[1].strip()
+                st.success("✅ Fusion Success!")
+            else:
+                st.warning("Could not split output. Raw text displayed below.")
+                st.session_state.s_out = res.text
+                st.session_state.n_out = "Fusion error—manual split required."
 
-# --- 5. EXPORT & DOWNLOAD ---
-if "final_novel" in st.session_state:
+        except Exception as e:
+            st.error(f"Fusion Crash: {e}")
+
+# --- 7. OUTPUT & DOWNLOAD ---
+if "n_out" in st.session_state:
     st.divider()
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("📝 Verbatim Script (Speaker-ID)")
-        st.text_area("Transcript", st.session_state.final_script, height=450)
-    with c2:
-        st.subheader(f"📖 {pov_char}'s Novel Chapter")
-        st.text_area("Manuscript", st.session_state.final_novel, height=450)
+    l, r = st.columns(2)
+    with l:
+        st.subheader("📝 Speaker-ID Transcript")
+        st.text_area("V1", st.session_state.s_out, height=450)
+    with r:
+        st.subheader(f"📖 {pov_char}'s Novel Draft")
+        st.text_area("V1", st.session_state.n_out, height=450)
     
     st.divider()
-    # Word Export
-    master_file = create_master_docx(st.session_state.final_script, st.session_state.final_novel, pov_char)
+    # Word Doc Export
+    final_doc = create_master_docx(st.session_state.s_out, st.session_state.n_out, pov_char)
     st.download_button(
-        label="📥 Download Full Archive (.docx)",
-        data=master_file,
+        label="📥 Download Manuscript (.docx)",
+        data=final_doc,
         file_name=f"Wizard_Archive_{pov_char}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
