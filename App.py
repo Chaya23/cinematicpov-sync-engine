@@ -4,35 +4,33 @@ import google.generativeai as genai
 import yt_dlp
 from google.api_core import exceptions
 
-# --- 1. CONFIG ---
-st.set_page_config(page_title="CinematicPOV: Verified Studio", layout="wide", page_icon="✍️")
+# --- 1. CONFIG & AUTH ---
+st.set_page_config(page_title="CinematicPOV: Auto-Link v13.2", layout="wide", page_icon="✍️")
 
 if "GOOGLE_API_KEY" not in st.secrets:
-    st.error("Missing API Key.")
+    st.error("Missing GOOGLE_API_KEY in Streamlit Secrets.")
     st.stop()
 
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-# --- 2. THE ENGINE ---
-def generate_studio_content(model, content):
-    """Generates the dual-view with retry logic for 429s."""
-    for attempt in range(4):
-        try:
-            return model.generate_content(
-                content, 
-                generation_config={
-                    "temperature": 0.4, # Lower temp = more accurate dialogue
-                    "max_output_tokens": 8192
-                }
-            )
-        except exceptions.ResourceExhausted:
-            time.sleep((2 ** attempt) + 1)
-    return None
+# --- 2. THE MODEL FINDER (The 404 Fix) ---
+def get_best_model():
+    """Scans for available Flash models to prevent 404 errors."""
+    try:
+        models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        # Prioritize Flash models for speed/video
+        flash_models = [m for m in models if 'flash' in m.lower()]
+        if flash_models:
+            return flash_models[0].split('/')[-1] # Returns just the ID
+        return "gemini-1.5-flash" # Fallback
+    except:
+        return "gemini-1.5-flash"
 
+# --- 3. VIDEO OPTIMIZER ---
 def download_video(url, tmp_dir):
     out_path = os.path.join(tmp_dir, "episode.%(ext)s")
     ydl_opts = {
-        'format': 'bestvideo[height<=480]+bestaudio/best', # High-accuracy 480p
+        'format': 'bestvideo[height<=480]+bestaudio/best',
         'outtmpl': out_path,
         'merge_output_format': 'mp4',
         'quiet': True,
@@ -41,18 +39,18 @@ def download_video(url, tmp_dir):
         ydl.download([url])
     return os.path.join(tmp_dir, "episode.mp4")
 
-# --- 3. UI ---
-st.title("✍️ CinematicPOV: Verified Studio v13.1")
-st.caption("Synchronized Dialogue Tracking + Character ID")
+# --- 4. STUDIO INTERFACE ---
+st.title("✍️ CinematicPOV: Verified Studio v13.2")
+st.caption("Auto-Detecting Models • Side-by-Side Accuracy")
 
-with st.expander("⚙️ Studio Settings", expanded=True):
+with st.expander("⚙️ Episode & Style Settings", expanded=True):
     col1, col2 = st.columns([2, 1])
     with col1:
-        url_input = st.text_input("Source URL:")
+        url_input = st.text_input("Source URL (DisneyNow/YouTube/Solar):")
         uploaded = st.file_uploader("Upload Video:", type=['mp4'])
     with col2:
         pov_char = st.selectbox("POV Character:", ["Roman", "Billie", "Justin", "Winter", "Milo"])
-        style = st.selectbox("Narrative Style:", ["YA Novel (S.J. Maas)", "Middle Grade (Percy Jackson)"])
+        style = st.selectbox("Narrative Style:", ["YA Novel (Sarah J. Maas)", "Middle Grade (Percy Jackson)"])
 
 if st.button("🚀 SYNC & AUTHOR", type="primary"):
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -61,7 +59,7 @@ if st.button("🚀 SYNC & AUTHOR", type="primary"):
                 video_path = os.path.join(tmp_dir, "input.mp4")
                 with open(video_path, "wb") as f: f.write(uploaded.getbuffer())
             else:
-                st.info("📥 Downloading...")
+                st.info("📥 Downloading episode video...")
                 video_path = download_video(url_input, tmp_dir)
 
             st.info("☁️ Vision Engine analyzing speakers...")
@@ -70,9 +68,11 @@ if st.button("🚀 SYNC & AUTHOR", type="primary"):
                 time.sleep(4)
                 video_file = genai.get_file(video_file.name)
 
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            # --- THE FIX: GET THE CORRECT MODEL NAME ---
+            target_model = get_best_model()
+            st.caption(f"Connected to Engine: {target_model}")
+            model = genai.GenerativeModel(target_model)
             
-            # The "Verification" Prompt
             prompt = f"""
             Identify all characters visually. Match every line of spoken dialogue to the correct name.
             
@@ -82,7 +82,7 @@ if st.button("🚀 SYNC & AUTHOR", type="primary"):
             
             2. NOVEL CHAPTER:
             - Write a detailed first-person chapter for {pov_char}.
-            - Ensure all dialogue from the transcript is accurately reflected.
+            - ACCURACY: Ensure every key line from the transcript is woven into the story.
             - Style: {style}.
             
             FORMAT:
@@ -92,7 +92,11 @@ if st.button("🚀 SYNC & AUTHOR", type="primary"):
             [Insert Novel]
             """
 
-            response = generate_studio_content(model, [video_file, prompt])
+            # Generation with high token allowance
+            response = model.generate_content(
+                [video_file, prompt],
+                generation_config={"max_output_tokens": 8192, "temperature": 0.4}
+            )
             
             if response and response.text:
                 parts = response.text.split("---POV_START---")
@@ -103,19 +107,17 @@ if st.button("🚀 SYNC & AUTHOR", type="primary"):
             genai.delete_file(video_file.name)
 
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Sync Interrupted: {e}")
 
-# --- 4. THE SIDE-BY-SIDE STUDIO ---
+# --- 5. SIDE-BY-SIDE STUDIO ---
 if "transcript" in st.session_state:
     st.divider()
     left, right = st.columns(2)
     
     with left:
         st.subheader("🎤 Verified Transcript")
-        st.markdown("*Use this to check character names and dialogue.*")
-        st.text_area("Source", st.session_state.transcript, height=800, label_visibility="collapsed")
+        st.text_area("Source Dialogue", st.session_state.transcript, height=800, label_visibility="collapsed")
         
     with right:
         st.subheader(f"📖 {pov_char}'s Adaptation")
-        st.markdown(f"*The {style} version of the scenes above.*")
-        st.text_area("Novel", st.session_state.novel, height=800, label_visibility="collapsed")
+        st.text_area("Novelized Story", st.session_state.novel, height=800, label_visibility="collapsed")
