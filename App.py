@@ -1,4 +1,4 @@
-         import streamlit as st
+import streamlit as st
 import os, tempfile
 from openai import OpenAI
 import google.generativeai as genai
@@ -118,4 +118,3 @@ if "novel" in st.session_state:
         st.download_button("Download Chapter", st.session_state.novel, "POV_Chapter.txt")
     with t2:
         st.text_area("Copy Labeled Transcript:", st.session_state.labeled, height=400)
- 
