@@ -1,122 +1,105 @@
 import streamlit as st
-import os, tempfile
-from openai import OpenAI
+import os, tempfile, time
 import google.generativeai as genai
 import yt_dlp
-from pydub import AudioSegment
 
-# --- 1. SETUP & AUTH ---
-st.set_page_config(page_title="CinematicPOV Sync v10.7", layout="wide")
+# --- 1. SETUP ---
+st.set_page_config(page_title="CinematicPOV Vision Sync", layout="wide")
 
 try:
-    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    proxy_url = st.secrets.get("PROXY_URL") 
-except Exception as e:
-    st.error("Missing API Keys in Secrets.")
+except:
+    st.error("Missing GOOGLE_API_KEY in Secrets!")
     st.stop()
 
-# --- 2. TRANSCRIPTION ENGINE ---
-def get_transcript(file_path):
-    audio = AudioSegment.from_file(file_path)
-    chunk_ms = 5 * 60 * 1000 
-    full_text = ""
-    progress_bar = st.progress(0)
-    chunks = list(range(0, len(audio), chunk_ms))
-    
-    for i, start in enumerate(chunks):
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-            audio[start:start+chunk_ms].export(tmp.name, format="mp3", bitrate="64k")
-            with open(tmp.name, "rb") as f:
-                response = client.audio.transcriptions.create(model="whisper-1", file=f)
-                full_text += response.text + " "
-            os.unlink(tmp.name)
-            progress_bar.progress((i + 1) / len(chunks))
-    return full_text
-
-# --- 3. DOWNLOADER ---
-def download_audio(url, tmp_dir):
-    out_path = os.path.join(tmp_dir, "audio.%(ext)s")
-    cookie_path = "cookies.txt" if os.path.exists("cookies.txt") else None
+# --- 2. VIDEO DOWNLOADER ---
+def download_video(url, tmp_dir):
+    # Download at lower resolution (480p) to stay under the 2GB Google File limit
+    out_path = os.path.join(tmp_dir, "video.%(ext)s")
     ydl_opts = {
-        'format': 'bestaudio/best',
+        'format': 'bestvideo[height<=480]+bestaudio/best[height<=480]',
         'outtmpl': out_path,
-        'quiet': True,
-        'proxy': proxy_url,
-        'geo_bypass': True,
-        'cookiefile': cookie_path,
-        'http_headers': {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0 Safari/537.36'},
-        'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '128'}],
+        'merge_output_format': 'mp4',
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
-    return os.path.join(tmp_dir, "audio.mp3")
+    return os.path.join(tmp_dir, "video.mp4")
 
-# --- 4. MAIN UI ---
-st.title("🎬 CinematicPOV Sync Engine v10.7")
+# --- 3. MAIN UI ---
+st.title("🎬 Vision Sync Engine v11.0")
+st.caption("Gemini will now 'Watch' the video for better character matching.")
 
-col1, col2 = st.columns(2)
-with col1:
-    url_input = st.text_input("Link (YouTube/Disney/Solar):")
-    uploaded = st.file_uploader("OR Upload File:", type=['mp3', 'mp4', 'm4a'])
-with col2:
-    chars = ["Roman", "Billie", "Justin", "Winter", "Milo", "Giada"]
-    pov_char = st.selectbox("Select Character POV:", chars + ["Custom..."])
-    if pov_char == "Custom...":
-        pov_char = st.text_input("Name:")
+url_input = st.text_input("Paste Video Link (YouTube/Disney/Solar):")
+uploaded_file = st.file_uploader("OR Upload Video File:", type=['mp4', 'mov', 'avi'])
 
-if st.button("🔥 START SYNC", type="primary"):
+chars = ["Roman", "Billie", "Justin", "Winter", "Milo", "Giada"]
+pov_char = st.selectbox("Select POV Character:", chars)
+
+if st.button("🚀 WATCH & SYNC FULL VIDEO", type="primary"):
     with tempfile.TemporaryDirectory() as tmp_dir:
         try:
-            if uploaded:
-                path = os.path.join(tmp_dir, "in.mp3")
-                with open(path, "wb") as f: f.write(uploaded.getbuffer())
-            elif url_input:
-                path = download_audio(url_input, tmp_dir)
+            # Step 1: Get Video File
+            if uploaded_file:
+                video_path = os.path.join(tmp_dir, "input_video.mp4")
+                with open(video_path, "wb") as f: f.write(uploaded_file.getbuffer())
             else:
-                st.error("No source provided!")
+                st.info("📥 Downloading video...")
+                video_path = download_video(url_input, tmp_dir)
+
+            # Step 2: Upload to Google Files API
+            st.info("☁️ Uploading to Gemini Vision Engine...")
+            video_file = genai.upload_file(path=video_path)
+            
+            # Step 3: Wait for Processing
+            while video_file.state.name == "PROCESSING":
+                time.sleep(5)
+                video_file = genai.get_file(video_file.name)
+            
+            if video_file.state.name == "FAILED":
+                st.error("Google failed to process video.")
                 st.stop()
 
-            st.info("🎤 Transcribing full episode...")
-            raw_text = get_transcript(path)
-            
-            st.info("🧠 Syncing with 2026 Gemini Engine...")
-            
-            # --- UPDATED MODEL SELECTION ---
-            # Trying 2.0-flash which is the current 2026 workhorse
-            try:
-                model = genai.GenerativeModel('gemini-2.0-flash')
-            except:
-                model = genai.GenerativeModel('gemini-pro') # Fallback
+            # Step 4: Analyze with Gemini 3 Flash
+            st.info("👁️ Gemini is watching and transcribing...")
+            model = genai.GenerativeModel('gemini-3-flash') # Using the 2026 flagship
             
             prompt = f"""
-            Identify characters in this transcript: {raw_text}
-            Grounding facts: Roman made the Lacey vase, Billie got the Staten Island makeover, Milo wants the monkey.
-            1. Provide a FULL Labeled Transcript (Name: Dialogue).
-            2. Write a 1st-person POV chapter for {pov_char}.
-            
+            Watch this full video. 
+            1. Transcribe the entire episode. 
+            2. Match the voices to the characters (Roman, Billie, Justin, etc.).
+            3. Use these facts: Roman made the Lacey vase; Billie gets the Staten Island makeover.
+            4. Write a 1st-person POV chapter from the perspective of {pov_char}.
+
             FORMAT:
             ---TRANSCRIPT---
-            [Labeled Text]
+            [Labeled Transcript]
             ---POV---
             [Novel Chapter]
             """
+
+            # The full video is now part of the prompt
+            response = model.generate_content([video_file, prompt])
             
-            res = model.generate_content(prompt)
-            parts = res.text.split("---POV---")
-            
-            st.session_state.labeled = parts[0].replace("---TRANSCRIPT---", "")
-            st.session_state.story = parts[1]
-            st.success("Sync Complete!")
+            # Display results
+            output = response.text
+            if "---POV---" in output:
+                parts = output.split("---POV---")
+                st.session_state.labeled = parts[0].replace("---TRANSCRIPT---", "")
+                st.session_state.story = parts[1]
+                st.success("✅ Sync Complete!")
+            else:
+                st.write(output)
+
+            # Cleanup: Delete file from Google storage
+            genai.delete_file(video_file.name)
 
         except Exception as e:
             st.error(f"Error: {e}")
 
-# --- 5. TABS ---
+# --- 4. TABS ---
 t1, t2 = st.tabs(["📖 Character Novel", "📝 Labeled Transcript"])
 if "story" in st.session_state:
-    with t1:
-        st.write(st.session_state.story)
-        st.download_button("Download Story", st.session_state.story, "story.txt")
-    with t2:
-        st.text_area("Full Transcript:", st.session_state.labeled, height=500)
+    with t1: st.write(st.session_state.story)
+    with t2: st.text_area("Transcript:", st.session_state.labeled, height=500)
+
+        
