@@ -1,4 +1,4 @@
-            import streamlit as st
+import streamlit as st
 import os, tempfile
 from openai import OpenAI
 import google.generativeai as genai
@@ -123,4 +123,3 @@ if "story" in st.session_state:
         st.download_button("Download Story", st.session_state.story, "story.txt")
     with t2:
         st.text_area("Full Transcript:", st.session_state.labeled, height=500)
-  
