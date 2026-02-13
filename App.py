@@ -3,103 +3,136 @@ import os, tempfile, time
 import google.generativeai as genai
 import yt_dlp
 
-# --- 1. SETUP ---
-st.set_page_config(page_title="CinematicPOV Vision Sync", layout="wide")
+# --- 1. SETTINGS & AUTH ---
+st.set_page_config(page_title="CinematicPOV Vision Sync", layout="wide", page_icon="🎬")
 
-try:
-    genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-except:
-    st.error("Missing GOOGLE_API_KEY in Secrets!")
+# Ensure API Key is present
+if "GOOGLE_API_KEY" not in st.secrets:
+    st.error("Please add GOOGLE_API_KEY to your Streamlit Secrets.")
     st.stop()
 
-# --- 2. VIDEO DOWNLOADER ---
-def download_video(url, tmp_dir):
-    # Download at lower resolution (480p) to stay under the 2GB Google File limit
-    out_path = os.path.join(tmp_dir, "video.%(ext)s")
+genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
+
+# --- 2. THE VIDEO DOWNLOADER (Optimized for Vision) ---
+def download_video_for_vision(url, tmp_dir):
+    # We download in 480p/720p to keep upload speeds fast and stay under file limits
+    out_path = os.path.join(tmp_dir, "episode_video.%(ext)s")
     ydl_opts = {
-        'format': 'bestvideo[height<=480]+bestaudio/best[height<=480]',
+        'format': 'bestvideo[height<=720]+bestaudio/best',
         'outtmpl': out_path,
         'merge_output_format': 'mp4',
+        'quiet': True,
+        'proxy': st.secrets.get("PROXY_URL"), # Optional proxy fix from earlier
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
-    return os.path.join(tmp_dir, "video.mp4")
+    return os.path.join(tmp_dir, "episode_video.mp4")
 
 # --- 3. MAIN UI ---
-st.title("🎬 Vision Sync Engine v11.0")
-st.caption("Gemini will now 'Watch' the video for better character matching.")
+st.title("🎬 CinematicPOV Vision Sync v11.5")
+st.info("Gemini 3 Flash will now WATCH the video to identify characters perfectly.")
 
-url_input = st.text_input("Paste Video Link (YouTube/Disney/Solar):")
-uploaded_file = st.file_uploader("OR Upload Video File:", type=['mp4', 'mov', 'avi'])
+col1, col2 = st.columns([2, 1])
+with col1:
+    url_input = st.text_input("Paste Video Link (Disney/Solar/YouTube):")
+    uploaded_video = st.file_uploader("OR Upload Video File (Max 200MB):", type=['mp4', 'mov', 'avi'])
+with col2:
+    chars = ["Roman", "Billie", "Justin", "Winter", "Milo", "Giada"]
+    pov_char = st.selectbox("POV Character:", chars + ["Custom..."])
+    if pov_char == "Custom...":
+        pov_char = st.text_input("Enter Name:")
 
-chars = ["Roman", "Billie", "Justin", "Winter", "Milo", "Giada"]
-pov_char = st.selectbox("Select POV Character:", chars)
+# --- 4. THE SYNC LOGIC ---
+if st.button("🚀 START VISION SYNC", type="primary"):
+    if not url_input and not uploaded_video:
+        st.warning("Please provide a video source!")
+        st.stop()
 
-if st.button("🚀 WATCH & SYNC FULL VIDEO", type="primary"):
     with tempfile.TemporaryDirectory() as tmp_dir:
         try:
-            # Step 1: Get Video File
-            if uploaded_file:
-                video_path = os.path.join(tmp_dir, "input_video.mp4")
-                with open(video_path, "wb") as f: f.write(uploaded_file.getbuffer())
+            # Step 1: Get the Video
+            if uploaded_video:
+                video_path = os.path.join(tmp_dir, "input.mp4")
+                with open(video_path, "wb") as f:
+                    f.write(uploaded_video.getbuffer())
             else:
-                st.info("📥 Downloading video...")
-                video_path = download_video(url_input, tmp_dir)
+                st.info("📥 Downloading episode video...")
+                video_path = download_video_for_vision(url_input, tmp_dir)
 
-            # Step 2: Upload to Google Files API
-            st.info("☁️ Uploading to Gemini Vision Engine...")
+            # Step 2: Upload to Google's Vision Engine
+            st.info("☁️ Uploading to Gemini Files API...")
             video_file = genai.upload_file(path=video_path)
             
-            # Step 3: Wait for Processing
+            # Step 3: Wait for Google to "Process" the video
+            progress_bar = st.progress(0)
+            status_text = st.empty()
             while video_file.state.name == "PROCESSING":
+                status_text.text("🔄 Gemini is 'watching' and processing frames...")
                 time.sleep(5)
                 video_file = genai.get_file(video_file.name)
             
             if video_file.state.name == "FAILED":
-                st.error("Google failed to process video.")
+                st.error("Google Vision processing failed. Try a different video.")
                 st.stop()
 
-            # Step 4: Analyze with Gemini 3 Flash
-            st.info("👁️ Gemini is watching and transcribing...")
-            model = genai.GenerativeModel('gemini-3-flash') # Using the 2026 flagship
+            # Step 4: AI Analysis with Fallback Logic
+            st.info("🧠 Analyzing Characters & Plot...")
+            
+            # Try 2026 models in order of intelligence
+            models_to_try = ['gemini-3-flash-preview', 'gemini-3-flash', 'gemini-2.5-flash']
             
             prompt = f"""
-            Watch this full video. 
-            1. Transcribe the entire episode. 
-            2. Match the voices to the characters (Roman, Billie, Justin, etc.).
-            3. Use these facts: Roman made the Lacey vase; Billie gets the Staten Island makeover.
-            4. Write a 1st-person POV chapter from the perspective of {pov_char}.
-
-            FORMAT:
-            ---TRANSCRIPT---
+            Task: Watch this video carefully.
+            1. Create a full transcript with Character Names labeled.
+            2. Grounding Facts: Roman made the Lacey vase; Billie gets the Staten Island makeover.
+            3. Write a 1st-person POV chapter for {pov_char} based on the episode events.
+            
+            Format your response as:
+            ---TRANSCRIPT_START---
             [Labeled Transcript]
-            ---POV---
-            [Novel Chapter]
+            ---POV_START---
+            [Story Chapter]
             """
 
-            # The full video is now part of the prompt
-            response = model.generate_content([video_file, prompt])
-            
-            # Display results
+            response = None
+            for m_name in models_to_try:
+                try:
+                    model = genai.GenerativeModel(m_name)
+                    response = model.generate_content([video_file, prompt])
+                    st.caption(f"Success using model: {m_name}")
+                    break
+                except Exception as e:
+                    if "404" in str(e) or "not found" in str(e).lower():
+                        continue # Try the next model in the list
+                    else:
+                        raise e
+
+            if not response:
+                st.error("No compatible Gemini models found for your API key.")
+                st.stop()
+
+            # Step 5: Parse & Display
             output = response.text
-            if "---POV---" in output:
-                parts = output.split("---POV---")
-                st.session_state.labeled = parts[0].replace("---TRANSCRIPT---", "")
-                st.session_state.story = parts[1]
+            if "---POV_START---" in output:
+                parts = output.split("---POV_START---")
+                st.session_state.labeled_transcript = parts[0].replace("---TRANSCRIPT_START---", "")
+                st.session_state.pov_story = parts[1]
                 st.success("✅ Sync Complete!")
             else:
                 st.write(output)
 
-            # Cleanup: Delete file from Google storage
+            # CLEANUP: Delete file from Google storage to save space
             genai.delete_file(video_file.name)
 
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Sync Error: {e}")
 
-# --- 4. TABS ---
-t1, t2 = st.tabs(["📖 Character Novel", "📝 Labeled Transcript"])
-if "story" in st.session_state:
-    with t1: st.write(st.session_state.story)
-    with t2: st.text_area("Transcript:", st.session_state.labeled, height=500)
-
-        
+# --- 5. RESULTS DISPLAY ---
+if "pov_story" in st.session_state:
+    tab1, tab2 = st.tabs(["📖 Character Novel", "📝 Labeled Transcript"])
+    with tab1:
+        st.markdown(f"### {pov_char}'s POV")
+        st.write(st.session_state.pov_story)
+        st.download_button("Download Story", st.session_state.pov_story, "chapter.txt")
+    with tab2:
+        st.text_area("Full Transcript:", st.session_state.labeled_transcript, height=400)
