@@ -1,5 +1,0 @@
-streamlit
-yt-dlp
-openai
-google-generativeai
-pydub
