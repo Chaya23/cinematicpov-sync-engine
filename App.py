@@ -27,22 +27,29 @@ if not openai_key or not google_key:
     st.error("Missing API Keys! Add them to Streamlit Secrets.")
     st.stop()
 
-# NEW: Initialize OpenAI Client for 2026 standard
+# Initialize OpenAI Client (Fixes APIRemovedInV1)
 client = OpenAI(api_key=openai_key)
 genai.configure(api_key=google_key)
 
-# --- 3. BYPASS DOWNLOADER ---
+# --- 3. BYPASS & GEO-BYPASS DOWNLOADER ---
 def download_audio_safe(url, output_dir):
-    """Downloads audio with mobile headers to bypass streaming blocks."""
+    """Downloads audio with geo-bypass and mobile headers."""
     output_template = os.path.join(output_dir, "audio.%(ext)s")
     
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': output_template,
-        # Tricking the site into thinking we are an iPhone browser
+        
+        # --- GEO-BYPASS ---
+        'geo_bypass': True,
+        'geo_bypass_country': 'US', # Fakes a US location
+        
+        # --- HEADERS & BYPASS ---
         'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-        'referer': 'https://solarmovies.win/',
+        'referer': 'https://www.google.com/',
         'nocheckcertificate': True,
+        
+        # --- FFmpeg EXTRACTION ---
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
@@ -57,7 +64,7 @@ def download_audio_safe(url, output_dir):
             ydl.download([url])
         return os.path.join(output_dir, "audio.mp3")
     except Exception as e:
-        st.error(f"Download Blocked: Try uploading the file manually from your phone!")
+        st.error(f"Download Failed: The site is blocking the server. Error: {e}")
         return None
 
 # --- 4. MAIN UI ---
@@ -66,13 +73,13 @@ st.title("🎬 CinematicPOV Sync Engine v6.0")
 tab1, tab2 = st.tabs(["📥 Process", "📖 Results"])
 
 with tab1:
-    url_input = st.text_input("Paste Link (SolarMovie/YouTube):")
-    uploaded_file = st.file_uploader("OR Upload File", type=['mp3', 'mp4', 'm4a'])
+    url_input = st.text_input("Paste Link (SolarMovie/YouTube/DisneyNow):")
+    uploaded_file = st.file_uploader("OR Upload Audio File Directly", type=['mp3', 'mp4', 'm4a'])
     pov_char = st.selectbox("POV Character", ["Justin", "Billie", "Roman", "Winter"])
     
     if st.button("START SYNC", type="primary"):
         if not url_input and not uploaded_file:
-            st.warning("Please provide a link or a file first!")
+            st.warning("Please provide a link or a file!")
             st.stop()
             
         with st.spinner("Processing..."):
@@ -88,28 +95,32 @@ with tab1:
                     audio_path = download_audio_safe(url_input, temp_dir)
                 
                 if audio_path and os.path.exists(audio_path):
-                    # Step 2: NEW 2026 Whisper Method
+                    # Step 2: OpenAI V1 Transcription
                     st.text("🎤 Transcribing (Whisper v1)...")
                     with open(audio_path, "rb") as f:
-                        # Fixed the APIRemovedInV1 error here
+                        # Safety check for empty files (common in blocked links)
+                        if os.path.getsize(audio_path) < 1000:
+                            st.error("Downloaded file is empty. Geo-bypass failed to get the video stream.")
+                            st.stop()
+                            
                         response = client.audio.transcriptions.create(
                             model="whisper-1", 
                             file=f
                         )
                     raw_text = response.text 
                     
-                    # Step 3: Gemini Mapping & Prose
+                    # Step 3: Gemini Mapping
                     st.text("🧠 Character Mapping (Gemini)...")
                     model = genai.GenerativeModel('gemini-1.5-flash')
-                    prompt = f"Using this transcript, write a detailed first-person POV narrative from {pov_char}'s perspective: {raw_text}"
-                    response = model.generate_content(prompt)
+                    prompt = f"Write a first-person POV narrative for {pov_char} based on this transcript: {raw_text}"
+                    res = model.generate_content(prompt)
                     
-                    st.session_state.pov_prose = response.text
-                    st.success("Complete! View the Results tab.")
+                    st.session_state.pov_prose = res.text
+                    st.success("Complete!")
                 else:
-                    st.error("Audio processing failed.")
+                    st.error("Could not process audio. Try a manual file upload.")
 
 with tab2:
     if "pov_prose" in st.session_state:
+        st.markdown(f"### {pov_char}'s POV Narrative")
         st.write(st.session_state.pov_prose)
-                        
