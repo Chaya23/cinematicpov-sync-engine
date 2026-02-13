@@ -1,4 +1,4 @@
- import streamlit as st
+import streamlit as st
 import os
 import tempfile
 from pathlib import Path
@@ -136,4 +136,3 @@ with tab2:
     if "pov_prose" in st.session_state:
         st.markdown(f"### {pov_char}'s POV Narrative")
         st.write(st.session_state.pov_prose)
-                       
