@@ -1,4 +1,4 @@
-import streamlit as st
+          import streamlit as st
 import os, tempfile
 from openai import OpenAI
 import google.generativeai as genai
@@ -6,13 +6,12 @@ import yt_dlp
 from pydub import AudioSegment
 
 # --- 1. SETUP ---
-st.set_page_config(page_title="CinematicPOV Sync v9.5", layout="wide")
+st.set_page_config(page_title="CinematicPOV Sync v9.6", layout="wide")
 
-# API Keys
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-# --- 2. TRANSCRIPTION ENGINE (Handles 413 error) ---
+# --- 2. TRANSCRIPTION ENGINE ---
 def get_transcript(file_path):
     audio = AudioSegment.from_file(file_path)
     chunk_length = 5 * 60 * 1000 
@@ -27,87 +26,104 @@ def get_transcript(file_path):
             os.unlink(tmp.name)
     return full_text
 
-# --- 3. MAIN UI ---
-st.title("🎬 CinematicPOV Sync Engine v9.5")
-st.caption("AI-Powered Diarization & Plot Grounding")
+# --- 3. THE RE-FIXED DOWNLOADER ---
+def download_with_bypass(url, tmp_dir):
+    out_path = os.path.join(tmp_dir, "a.%(ext)s")
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': out_path,
+        'noplaylist': True,
+        'geo_bypass': True,
+        'geo_bypass_country': 'US',
+        # AGGRESSIVE BYPASS HEADERS
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Android 14; Mobile; rv:121.0) Gecko/121.0 Firefox/121.0',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+        },
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios'],
+                'player_skip': ['webpage', 'configs', 'js']
+            }
+        },
+        'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '128'}],
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+    return os.path.join(tmp_dir, "a.mp3")
+
+# --- 4. MAIN UI ---
+st.title("🎬 CinematicPOV Sync Engine v9.6")
 
 col1, col2 = st.columns(2)
 with col1:
-    url_input = st.text_input("Paste Link (YouTube/Disney/Solar):")
+    url_input = st.text_input("Paste Link:")
     uploaded = st.file_uploader("OR Upload Audio File:", type=['mp3', 'mp4', 'm4a'])
 with col2:
     standard_chars = ["Roman", "Billie", "Justin", "Winter", "Milo", "Giada"]
-    pov_char = st.selectbox("Select Character POV:", standard_chars + ["Custom..."])
+    pov_char = st.selectbox("Select POV:", standard_chars + ["Custom..."])
     if pov_char == "Custom...":
-        pov_char = st.text_input("Type Character Name:")
+        pov_char = st.text_input("Name:")
 
-if st.button("🔥 RUN SYNC & LABEL", type="primary"):
-    with st.spinner("Step 1: Extracting Audio & Bypassing Blocks..."):
+if st.button("🔥 RUN SYNC", type="primary"):
+    if not url_input and not uploaded:
+        st.error("Please provide a link or file.")
+        st.stop()
+
+    with st.spinner("Bypassing site security & extracting audio..."):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            path = None
-            if uploaded:
-                path = os.path.join(tmp_dir, "input.mp3")
-                with open(path, "wb") as f: f.write(uploaded.getbuffer())
-            else:
-                ydl_opts = {
-                    'format': 'bestaudio',
-                    'outtmpl': os.path.join(tmp_dir, "a.%(ext)s"),
-                    'geo_bypass': True,
-                    'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}],
-                }
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([url_input])
-                path = os.path.join(tmp_dir, "a.mp3")
-
-            # --- STEP 2: TRANSCRIBE ---
-            st.spinner("Step 2: Transcribing Audio (Whisper)...")
-            raw_text = get_transcript(path)
-            
-            # --- STEP 3: PLOT MATCHING & DIARIZATION ---
-            st.spinner("Step 3: Grounding with Plot & Labeling Speakers...")
-            model = genai.GenerativeModel('gemini-2.5-flash')
-            
-            # This prompt forces accuracy by checking real show facts
-            master_prompt = f"""
-            SYSTEM TASK:
-            1. Search the web for 'Wizards Beyond Waverly Place' episode plots to match this transcript: {raw_text[:2000]}
-            2. Identify the EXACT episode.
-            3. DIARIZATION: Rewrite the full transcript below, placing the speaker's name before every line (e.g., Billie: "...", Roman: "..."). 
-               Be careful: Milo wanted the pet monkey, Billie got the Staten Island makeover, Roman and Winter got stuck together.
-            4. NOVEL: Write a high-quality 1st-person POV chapter for {pov_char} based on the labeled transcript.
-            
-            FORMAT:
-            ---TRANSCRIPT---
-            [Labeled Transcript Here]
-            
-            ---POV_CHAPTER---
-            [POV Chapter Here]
-            """
-            
             try:
-                res = model.generate_content(master_prompt)
-                full_response = res.text
-                
-                # Split for UI
-                if "---POV_CHAPTER---" in full_response:
-                    transcript_part, pov_part = full_response.split("---POV_CHAPTER---")
-                    st.session_state.labeled_transcript = transcript_part.replace("---TRANSCRIPT---", "")
-                    st.session_state.final_pov = pov_part
+                if uploaded:
+                    path = os.path.join(tmp_dir, "input.mp3")
+                    with open(path, "wb") as f: f.write(uploaded.getbuffer())
                 else:
-                    st.session_state.final_output = full_response
+                    path = download_with_bypass(url_input, tmp_dir)
+
+                # Step 2: Transcribe
+                st.text("🎤 Transcribing...")
+                raw_text = get_transcript(path)
+                
+                # Step 3: Grounding & Novel
+                st.text(f"🧠 Grounding with Wiki & Writing {pov_char} POV...")
+                model = genai.GenerativeModel('gemini-2.5-flash')
+                
+                master_prompt = f"""
+                You are a story engine. Use web search to match this transcript to the correct episode of 'Wizards Beyond Waverly Place'.
+                TRANSCRIPT: {raw_text[:2500]}
+                
+                1. Label speakers accurately (e.g. Billie: [Dialogue], Roman: [Dialogue]). 
+                   NOTE: Billie gets the Staten Island makeover. Milo wants the monkey. Roman/Winter do the friendship spell.
+                2. Write a 1st person POV chapter for {pov_char}.
+                
+                FORMAT:
+                ---TRANSCRIPT---
+                [Labeled Transcript]
+                ---POV---
+                [Novel Chapter]
+                """
+                
+                res = model.generate_content(master_prompt)
+                full_text = res.text
+                
+                if "---POV---" in full_text:
+                    parts = full_text.split("---POV---")
+                    st.session_state.labeled = parts[0].replace("---TRANSCRIPT---", "")
+                    st.session_state.story = parts[1]
+                else:
+                    st.session_state.story = full_text
                 
                 st.success("Sync Complete!")
+
             except Exception as e:
-                st.error(f"AI Error: {e}")
+                st.error(f"Download failed. The site is blocking the server. Try downloading the audio to your phone and uploading it here. Error: {e}")
 
-# --- 4. RESULTS DISPLAY ---
+# --- 5. TABS ---
 t1, t2 = st.tabs(["📖 Character Novel", "📝 Labeled Transcript"])
-
-if "final_pov" in st.session_state:
+if "story" in st.session_state:
     with t1:
-        st.markdown(f"### {pov_char}'s Perspective")
-        st.write(st.session_state.final_pov)
-        st.download_button("Download POV", st.session_state.final_pov, f"{pov_char}_POV.txt")
+        st.write(st.session_state.story)
+        st.download_button("Download Story", st.session_state.story, "story.txt")
     with t2:
-        st.markdown("### Official Labeled Transcript")
-        st.text_area("Copy this for your notes:", st.session_state.labeled_transcript, height=400)
+        st.text_area("Labeled Transcript:", st.session_state.labeled if "labeled" in st.session_state else "Processing...", height=400)
+  
