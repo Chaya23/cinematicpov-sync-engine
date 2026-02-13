@@ -13,4 +13,6 @@ tqdm>=4.66.0
 tenacity>=8.2.0
 streamlit-option-menu>=0.3.0
 streamlit-extras>=0.3.0
-python-docx
+python-docxstreamlit
+
+
