@@ -1,4 +1,4 @@
-import streamlit as st
+        import streamlit as st
 import os
 import tempfile
 from pathlib import Path
@@ -26,11 +26,9 @@ google_key = st.secrets.get("GOOGLE_API_KEY")
 client = OpenAI(api_key=openai_key)
 genai.configure(api_key=google_key)
 
-# --- 2. THE ULTIMATE CHUNKER (Fixes 413 Error) ---
+# --- 2. ROBUST TRANSCRIPTION (5-min chunks to stay under 25MB) ---
 def transcribe_robust(file_path):
-    """Slices audio into 5-minute chunks & compresses to avoid 25MB limit."""
     audio = AudioSegment.from_file(file_path)
-    # 5 minutes in milliseconds
     five_minutes = 5 * 60 * 1000 
     chunks = range(0, len(audio), five_minutes)
     
@@ -43,9 +41,7 @@ def transcribe_robust(file_path):
         chunk = audio[start_time:start_time + five_minutes]
         
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_chunk:
-            # Exporting at 64k bitrate to keep file size tiny
             chunk.export(tmp_chunk.name, format="mp3", bitrate="64k")
-            
             with open(tmp_chunk.name, "rb") as f:
                 response = client.audio.transcriptions.create(
                     model="whisper-1", 
@@ -53,13 +49,12 @@ def transcribe_robust(file_path):
                 )
                 full_transcript += response.text + " "
             os.unlink(tmp_chunk.name)
-        
         progress_bar.progress((i + 1) / len(chunks))
     
     status_text.text("Transcription complete!")
     return full_transcript
 
-# --- 3. DOWNLOADER ---
+# --- 3. NUCLEAR BYPASS DOWNLOADER ---
 def download_audio_safe(url, output_dir):
     output_template = os.path.join(output_dir, "audio.%(ext)s")
     ydl_opts = {
@@ -67,6 +62,13 @@ def download_audio_safe(url, output_dir):
         'outtmpl': output_template,
         'geo_bypass': True,
         'geo_bypass_country': 'US',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web_creator'],
+                'player_skip': ['webpage', 'configs', 'js']
+            }
+        },
+        'user_agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '128'}],
         'quiet': True,
     }
@@ -74,19 +76,17 @@ def download_audio_safe(url, output_dir):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         return os.path.join(output_dir, "audio.mp3")
-    except Exception as e:
-        st.error(f"Download failed: {e}")
-        return None
+    except: return None
 
 # --- 4. MAIN UI ---
-st.title("🎬 CinematicPOV Sync Engine v7.5")
+st.title("🎬 CinematicPOV Sync Engine v8.0")
 
-url_input = st.text_input("Paste Link (YouTube/SolarMovie):")
+url_input = st.text_input("Paste Link:")
 uploaded_file = st.file_uploader("OR Upload Audio File Directly:", type=['mp3', 'mp4', 'm4a'])
 pov_char = st.selectbox("POV Character", ["Justin", "Billie", "Roman", "Winter"])
 
 if st.button("START SYNC", type="primary"):
-    with st.spinner("Processing Large File..."):
+    with st.spinner("Processing..."):
         with tempfile.TemporaryDirectory() as temp_dir:
             audio_path = None
             if uploaded_file:
@@ -96,15 +96,23 @@ if st.button("START SYNC", type="primary"):
                 audio_path = download_audio_safe(url_input, temp_dir)
             
             if audio_path and os.path.exists(audio_path):
-                # Using the Robust Chunker
+                # 1. Transcribe
                 raw_text = transcribe_robust(audio_path)
                 
-                st.text(f"🧠 Creating {pov_char}'s Chapter...")
-                model = genai.GenerativeModel('gemini-1.5-flash')
-                res = model.generate_content(f"Write a 1st person POV for {pov_char} based on this script: {raw_text}")
+                # 2. Map to Character using the NEW 2026 Model
+                st.text(f"🧠 Mapping {pov_char} (Using Gemini 2.5 Flash)...")
                 
-                st.markdown(f"## {pov_char}'s POV Story")
-                st.write(res.text)
-                st.session_state.pov_prose = res.text
+                # We use the updated 2026 model name here
+                model = genai.GenerativeModel('gemini-2.5-flash')
+                
+                prompt = f"Write a 1st person POV narrative for {pov_char} from 'Wizards Beyond Waverly Place' based on this script: {raw_text}"
+                
+                try:
+                    res = model.generate_content(prompt)
+                    st.markdown(f"## {pov_char}'s Story")
+                    st.write(res.text)
+                    st.session_state.pov_prose = res.text
+                except Exception as e:
+                    st.error(f"Gemini Error: {e}")
             else:
-                st.error("Could not find audio source.")
+                st.error("Failed to extract audio. Site may be blocked.")
