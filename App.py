@@ -1,4 +1,4 @@
-          import streamlit as st
+         import streamlit as st
 import os, tempfile
 from openai import OpenAI
 import google.generativeai as genai
@@ -6,124 +6,116 @@ import yt_dlp
 from pydub import AudioSegment
 
 # --- 1. SETUP ---
-st.set_page_config(page_title="CinematicPOV Sync v9.6", layout="wide")
+st.set_page_config(page_title="CinematicPOV Sync v9.7", layout="wide")
 
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-# --- 2. TRANSCRIPTION ENGINE ---
+# --- 2. TRANSCRIPTION (Chunking for 413 fix) ---
 def get_transcript(file_path):
     audio = AudioSegment.from_file(file_path)
-    chunk_length = 5 * 60 * 1000 
-    chunks = range(0, len(audio), chunk_length)
+    chunk_ms = 5 * 60 * 1000 
     full_text = ""
-    for i, start in enumerate(chunks):
+    for start in range(0, len(audio), chunk_ms):
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-            audio[start:start+chunk_length].export(tmp.name, format="mp3", bitrate="64k")
+            audio[start:start+chunk_ms].export(tmp.name, format="mp3", bitrate="64k")
             with open(tmp.name, "rb") as f:
                 response = client.audio.transcriptions.create(model="whisper-1", file=f)
                 full_text += response.text + " "
             os.unlink(tmp.name)
     return full_text
 
-# --- 3. THE RE-FIXED DOWNLOADER ---
-def download_with_bypass(url, tmp_dir):
-    out_path = os.path.join(tmp_dir, "a.%(ext)s")
+# --- 3. STEALTH DOWNLOADER (The Fix) ---
+def download_stealth(url, tmp_dir):
+    out_path = os.path.join(tmp_dir, "audio.%(ext)s")
+    
+    # Check if user uploaded a cookies file to GitHub
+    cookie_path = "cookies.txt" if os.path.exists("cookies.txt") else None
+    
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': out_path,
-        'noplaylist': True,
+        'quiet': True,
+        'no_warnings': True,
         'geo_bypass': True,
         'geo_bypass_country': 'US',
-        # AGGRESSIVE BYPASS HEADERS
+        'cookiefile': cookie_path, # THIS IS THE KEY FOR DISNEY/SOLAR
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Android 14; Mobile; rv:121.0) Gecko/121.0 Firefox/121.0',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-us,en;q=0.5',
-        },
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios'],
-                'player_skip': ['webpage', 'configs', 'js']
-            }
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Referer': 'https://disneynow.com/',
         },
         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '128'}],
     }
+    
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
-    return os.path.join(tmp_dir, "a.mp3")
+    return os.path.join(tmp_dir, "audio.mp3")
 
 # --- 4. MAIN UI ---
-st.title("🎬 CinematicPOV Sync Engine v9.6")
+st.title("🎬 CinematicPOV Sync Engine v9.7")
 
 col1, col2 = st.columns(2)
 with col1:
-    url_input = st.text_input("Paste Link:")
-    uploaded = st.file_uploader("OR Upload Audio File:", type=['mp3', 'mp4', 'm4a'])
+    url_input = st.text_input("Paste Link (YouTube/DisneyNow/Solar):")
+    uploaded = st.file_uploader("OR Upload Audio File Directly", type=['mp3', 'mp4', 'm4a'])
 with col2:
-    standard_chars = ["Roman", "Billie", "Justin", "Winter", "Milo", "Giada"]
-    pov_char = st.selectbox("Select POV:", standard_chars + ["Custom..."])
-    if pov_char == "Custom...":
-        pov_char = st.text_input("Name:")
+    chars = ["Roman", "Billie", "Justin", "Winter", "Milo", "Giada"]
+    pov_char = st.selectbox("POV Character:", chars + ["Custom..."])
+    if pov_char == "Custom...": pov_char = st.text_input("Enter Name:")
 
-if st.button("🔥 RUN SYNC", type="primary"):
-    if not url_input and not uploaded:
-        st.error("Please provide a link or file.")
-        st.stop()
-
-    with st.spinner("Bypassing site security & extracting audio..."):
+if st.button("🔥 START SYNC", type="primary"):
+    with st.spinner("Bypassing security and extracting..."):
         with tempfile.TemporaryDirectory() as tmp_dir:
             try:
+                # Step 1: Download/Load
+                path = download_stealth(url_input, tmp_dir) if not uploaded else os.path.join(tmp_dir, "in.mp3")
                 if uploaded:
-                    path = os.path.join(tmp_dir, "input.mp3")
                     with open(path, "wb") as f: f.write(uploaded.getbuffer())
-                else:
-                    path = download_with_bypass(url_input, tmp_dir)
 
                 # Step 2: Transcribe
                 st.text("🎤 Transcribing...")
-                raw_text = get_transcript(path)
+                transcript = get_transcript(path)
                 
                 # Step 3: Grounding & Novel
-                st.text(f"🧠 Grounding with Wiki & Writing {pov_char} POV...")
+                st.text("🧠 Grounding with Wiki & Writing Story...")
                 model = genai.GenerativeModel('gemini-2.5-flash')
                 
-                master_prompt = f"""
-                You are a story engine. Use web search to match this transcript to the correct episode of 'Wizards Beyond Waverly Place'.
-                TRANSCRIPT: {raw_text[:2500]}
+                prompt = f"""
+                You are a 'Wizards Beyond Waverly Place' expert. 
+                TRANSCRIPT: {transcript[:3000]}
                 
-                1. Label speakers accurately (e.g. Billie: [Dialogue], Roman: [Dialogue]). 
-                   NOTE: Billie gets the Staten Island makeover. Milo wants the monkey. Roman/Winter do the friendship spell.
-                2. Write a 1st person POV chapter for {pov_char}.
+                TASK:
+                1. Identify the characters correctly. 
+                   - MILO wants the monkey. 
+                   - BILLIE gets the makeover. 
+                   - ROMAN & WINTER do the 'back together' spell.
+                2. Generate a labeled transcript (Name: Dialogue).
+                3. Write a first-person POV novel chapter for {pov_char}.
                 
                 FORMAT:
                 ---TRANSCRIPT---
-                [Labeled Transcript]
+                [Labeled Text]
                 ---POV---
-                [Novel Chapter]
+                [Novel Content]
                 """
                 
-                res = model.generate_content(master_prompt)
-                full_text = res.text
+                res = model.generate_content(prompt)
+                parts = res.text.split("---POV---")
                 
-                if "---POV---" in full_text:
-                    parts = full_text.split("---POV---")
-                    st.session_state.labeled = parts[0].replace("---TRANSCRIPT---", "")
-                    st.session_state.story = parts[1]
-                else:
-                    st.session_state.story = full_text
-                
+                st.session_state.labeled = parts[0].replace("---TRANSCRIPT---", "")
+                st.session_state.novel = parts[1]
                 st.success("Sync Complete!")
 
             except Exception as e:
-                st.error(f"Download failed. The site is blocking the server. Try downloading the audio to your phone and uploading it here. Error: {e}")
+                st.error(f"DOWNLOAD ERROR: Disney/Solar is blocking this server IP. \n\nFIX: Download the audio to your phone/PC first, then use the 'Upload Audio File' box above.")
 
-# --- 5. TABS ---
-t1, t2 = st.tabs(["📖 Character Novel", "📝 Labeled Transcript"])
-if "story" in st.session_state:
+# --- 5. RESULTS ---
+t1, t2 = st.tabs(["📖 Character POV", "📝 Labeled Transcript"])
+if "novel" in st.session_state:
     with t1:
-        st.write(st.session_state.story)
-        st.download_button("Download Story", st.session_state.story, "story.txt")
+        st.write(st.session_state.novel)
+        st.download_button("Download Chapter", st.session_state.novel, "POV_Chapter.txt")
     with t2:
-        st.text_area("Labeled Transcript:", st.session_state.labeled if "labeled" in st.session_state else "Processing...", height=400)
-  
+        st.text_area("Copy Labeled Transcript:", st.session_state.labeled, height=400)
+ 
