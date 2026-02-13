@@ -154,4 +154,3 @@ if "story" in st.session_state:
         st.download_button("Download Story", st.session_state.story, "story.txt")
     with t2:
         st.text_area("Full Labeled Transcript (Copy-Paste):", st.session_state.labeled, height=500)
-          
