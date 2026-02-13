@@ -5,6 +5,7 @@ from pathlib import Path
 from openai import OpenAI
 import google.generativeai as genai
 import yt_dlp
+from pydub import AudioSegment
 
 # --- 1. SETTINGS & AUTH ---
 st.set_page_config(page_title="CinematicPOV Sync Engine", page_icon="🎬", layout="wide")
@@ -22,117 +23,88 @@ if not st.session_state["password_correct"]:
 # API Keys
 openai_key = st.secrets.get("OPENAI_API_KEY")
 google_key = st.secrets.get("GOOGLE_API_KEY")
-
-if not openai_key or not google_key:
-    st.error("Missing API Keys! Add them to Streamlit Secrets.")
-    st.stop()
-
 client = OpenAI(api_key=openai_key)
 genai.configure(api_key=google_key)
 
-# --- 2. THE "NUCLEAR" BYPASS DOWNLOADER ---
-def download_audio_safe(url, output_dir):
-    """
-    Uses aggressive Android spoofing and Geo-Bypass 
-    to fight 'Video Not Available' errors.
-    """
-    output_template = os.path.join(output_dir, "audio.%(ext)s")
+# --- 2. THE ULTIMATE CHUNKER (Fixes 413 Error) ---
+def transcribe_robust(file_path):
+    """Slices audio into 5-minute chunks & compresses to avoid 25MB limit."""
+    audio = AudioSegment.from_file(file_path)
+    # 5 minutes in milliseconds
+    five_minutes = 5 * 60 * 1000 
+    chunks = range(0, len(audio), five_minutes)
     
+    full_transcript = ""
+    status_text = st.empty()
+    progress_bar = st.progress(0)
+    
+    for i, start_time in enumerate(chunks):
+        status_text.text(f"Processing part {i+1} of {len(chunks)}...")
+        chunk = audio[start_time:start_time + five_minutes]
+        
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_chunk:
+            # Exporting at 64k bitrate to keep file size tiny
+            chunk.export(tmp_chunk.name, format="mp3", bitrate="64k")
+            
+            with open(tmp_chunk.name, "rb") as f:
+                response = client.audio.transcriptions.create(
+                    model="whisper-1", 
+                    file=f
+                )
+                full_transcript += response.text + " "
+            os.unlink(tmp_chunk.name)
+        
+        progress_bar.progress((i + 1) / len(chunks))
+    
+    status_text.text("Transcription complete!")
+    return full_transcript
+
+# --- 3. DOWNLOADER ---
+def download_audio_safe(url, output_dir):
+    output_template = os.path.join(output_dir, "audio.%(ext)s")
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': output_template,
-        
-        # --- GEO-BYPASS ---
         'geo_bypass': True,
         'geo_bypass_country': 'US',
-        
-        # --- ANDROID API SPOOF (The Fix for 'Not Available') ---
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'web_creator'],
-                'player_skip': ['webpage', 'configs', 'js']
-            }
-        },
-        
-        # --- HEADERS ---
-        'user_agent': 'Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36',
-        'referer': 'https://www.google.com/',
-        'nocheckcertificate': True,
-        
-        # --- FFmpeg EXTRACTION ---
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
+        'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '128'}],
         'quiet': True,
-        'no_warnings': True,
     }
-    
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         return os.path.join(output_dir, "audio.mp3")
     except Exception as e:
-        st.error(f"❌ Server Blocked: The cloud IP is banned by the site. Error: {e}")
+        st.error(f"Download failed: {e}")
         return None
 
-# --- 3. MAIN UI ---
-st.title("🎬 CinematicPOV Sync Engine v6.0")
+# --- 4. MAIN UI ---
+st.title("🎬 CinematicPOV Sync Engine v7.5")
 
-tab1, tab2 = st.tabs(["📥 Process", "📖 Results"])
+url_input = st.text_input("Paste Link (YouTube/SolarMovie):")
+uploaded_file = st.file_uploader("OR Upload Audio File Directly:", type=['mp3', 'mp4', 'm4a'])
+pov_char = st.selectbox("POV Character", ["Justin", "Billie", "Roman", "Winter"])
 
-with tab1:
-    url_input = st.text_input("Paste Link (YouTube/SolarMovie/DisneyNow):")
-    uploaded_file = st.file_uploader("OR Upload Audio File Directly", type=['mp3', 'mp4', 'm4a', 'wav'])
-    pov_char = st.selectbox("POV Character", ["Justin", "Billie", "Roman", "Winter"])
-    
-    if st.button("START SYNC", type="primary"):
-        if not url_input and not uploaded_file:
-            st.warning("Please provide a link or a file!")
-            st.stop()
+if st.button("START SYNC", type="primary"):
+    with st.spinner("Processing Large File..."):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            audio_path = None
+            if uploaded_file:
+                audio_path = os.path.join(temp_dir, "input.mp3")
+                with open(audio_path, "wb") as f: f.write(uploaded_file.getbuffer())
+            elif url_input:
+                audio_path = download_audio_safe(url_input, temp_dir)
             
-        with st.spinner("Syncing Engine..."):
-            with tempfile.TemporaryDirectory() as temp_dir:
-                audio_path = None
+            if audio_path and os.path.exists(audio_path):
+                # Using the Robust Chunker
+                raw_text = transcribe_robust(audio_path)
                 
-                # Step 1: Get Audio
-                if uploaded_file:
-                    audio_path = os.path.join(temp_dir, "input.mp3")
-                    with open(audio_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
-                elif url_input:
-                    audio_path = download_audio_safe(url_input, temp_dir)
+                st.text(f"🧠 Creating {pov_char}'s Chapter...")
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                res = model.generate_content(f"Write a 1st person POV for {pov_char} based on this script: {raw_text}")
                 
-                # Step 2: Validate and Transcribe
-                if audio_path and os.path.exists(audio_path) and os.path.getsize(audio_path) > 1000:
-                    st.text("🎤 Transcribing (Whisper v1)...")
-                    try:
-                        with open(audio_path, "rb") as f:
-                            # OpenAI V1 Syntax
-                            response = client.audio.transcriptions.create(
-                                model="whisper-1", 
-                                file=f
-                            )
-                        raw_text = response.text
-                        
-                        # Step 3: Gemini POV Narrative
-                        st.text(f"🧠 Mapping {pov_char}'s perspective...")
-                        model = genai.GenerativeModel('gemini-1.5-flash')
-                        prompt = (
-                            f"Act as a professional scriptwriter. Using the following transcript, "
-                            f"write a first-person narrative chapter from the perspective of {pov_char}. "
-                            f"Focus on their inner monologue and reactions. \n\nTranscript: {raw_text}"
-                        )
-                        res = model.generate_content(prompt)
-                        st.session_state.pov_prose = res.text
-                        st.success("Complete!")
-                    except Exception as e:
-                        st.error(f"AI Processing Error: {e}")
-                else:
-                    st.error("Extraction failed. Try uploading the audio file manually.")
-
-with tab2:
-    if "pov_prose" in st.session_state:
-        st.markdown(f"### {pov_char}'s POV Narrative")
-        st.write(st.session_state.pov_prose)
+                st.markdown(f"## {pov_char}'s POV Story")
+                st.write(res.text)
+                st.session_state.pov_prose = res.text
+            else:
+                st.error("Could not find audio source.")
