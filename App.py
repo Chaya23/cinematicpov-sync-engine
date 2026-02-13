@@ -1,4 +1,4 @@
-                    import streamlit as st
+import streamlit as st
 import os
 import tempfile
 from pathlib import Path
@@ -112,3 +112,4 @@ with tab1:
 with tab2:
     if "pov_prose" in st.session_state:
         st.write(st.session_state.pov_prose)
+                        
