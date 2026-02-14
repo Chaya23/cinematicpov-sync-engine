@@ -1,123 +1,80 @@
- import streamlit as st
-import os, time, subprocess
+import streamlit as st
 import google.generativeai as genai
 from openai import OpenAI
 from docx import Document 
 from io import BytesIO
-import yt_dlp
+import time
 
-# --- 1. CONFIG & STYLING ---
-st.set_page_config(page_title="Roman's Justice v20.0", layout="wide")
-st.markdown("""
-    <style>
-    .main { background-color: #0e1117; color: #ffffff; }
-    .stTextArea textarea { background-color: #1e1e1e; color: #00ff00; font-family: 'Courier New'; }
-    </style>
-    """, unsafe_allow_html=True)
+# --- 1. MOBILE UI SETUP ---
+st.set_page_config(page_title="Roman's Justice Mobile", layout="centered")
 
-# --- 2. API KEYS ---
-# Input keys manually in the sidebar for local security
+st.title("🧙 Roman's Redemption")
+st.subheader("Mobile Edition: Video + Transcript Sync")
+
+# --- 2. API KEYS (Sidebar) ---
 with st.sidebar:
-    st.header("🔑 Wizard Keys")
-    GEMINI_KEY = st.text_input("Gemini API Key:", type="password")
-    OPENAI_KEY = st.text_input("OpenAI API Key:", type="password")
-    st.divider()
-    st.info("Ensure 'cookies.txt' is in the script folder for Disney/Solar bypass.")
+    st.header("🔑 Credentials")
+    GEM_KEY = st.text_input("Gemini API Key:", type="password")
+    OA_KEY = st.text_input("OpenAI API Key:", type="password")
 
-if GEMINI_KEY and OPENAI_KEY:
-    genai.configure(api_key=GEMINI_KEY)
-    client_oa = OpenAI(api_key=OPENAI_KEY)
+if GEM_KEY and OA_KEY:
+    genai.configure(api_key=GEM_KEY)
+    client_oa = OpenAI(api_key=OA_KEY)
 
-# --- 3. THE STEALTH ENGINE ---
-def stealth_download(url):
-    st.info("🛰️ Bypassing Geoblocks & DRM via Cookies...")
-    out_name = "episode_3_capture.mp4"
-    ydl_opts = {
-        'format': 'bestvideo[height<=480]+bestaudio/best',
-        'outtmpl': out_name,
-        'cookiefile': 'cookies.txt', # Matches your local file
-        'geo_bypass': True,
-        'nocheckcertificate': True,
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
-    return out_name
+# --- 3. THE UPLOADERS ---
+st.info("Step 1: Upload the Episode 3 video from your phone's storage.")
+uploaded_video = st.file_uploader("Select Video (.mp4)", type=["mp4", "mov", "avi"])
 
-# --- 4. THE UI ---
-st.title("🧙 Wizards Beyond: The Roman Redemption")
-st.caption("Target: Season 1, Episode 3 - 'Saved by the Spell'")
+st.info("Step 2: The Forever Dreaming Transcript is ready to be synced.")
+transcript_input = st.text_area("Paste Transcript Here:", height=200)
 
-col_vid, col_txt = st.columns(2)
-
-with col_vid:
-    video_url = st.text_input("Enter Video Link (Solar/VidCloud/Disney):")
-    
-with col_txt:
-    st.write("📄 Forever Dreaming Transcript detected in memory.")
-    # We use the text you provided in the prompt
-    transcript_content = st.text_area("Transcript Content:", value="[PASTED TRANSCRIPT FROM YOUR PROMPT]", height=200)
-
-if st.button("🚀 EXECUTE SYNCED ANALYSIS"):
-    if not (GEMINI_KEY and OPENAI_KEY):
-        st.error("Please enter both API keys in the sidebar.")
+# --- 4. PROCESSING LOGIC ---
+if st.button("🚀 BUILD ROMAN'S NOVEL"):
+    if not (GEM_KEY and OA_KEY and uploaded_video):
+        st.error("Please provide both keys and the video file!")
     else:
-        # STEP 1: DOWNLOAD
-        v_file = stealth_download(video_url)
-        
-        # STEP 2: WHISPER AUDIO EXTRACT
-        st.info("👂 Whisper is listening for Roman's 'Sidelined' moments...")
-        audio_path = "temp_voice.mp3"
-        subprocess.run(f"ffmpeg -i {v_file} -q:a 0 -map a {audio_path} -y", shell=True)
-        
-        with open(audio_path, "rb") as f:
-            transcription = client_oa.audio.transcriptions.create(model="whisper-1", file=f)
-            verbatim_text = transcription.text
+        with st.status("🔮 AI is analyzing Roman's moments...", expanded=True) as status:
+            
+            # Save temporary file for Gemini
+            with open("temp_vid.mp4", "wb") as f:
+                f.write(uploaded_video.read())
+            
+            # Upload to Gemini (Visual Brain)
+            st.write("👁️ Gemini is watching the 'Winter & Roman' scenes...")
+            video_ai = genai.upload_file(path="temp_vid.mp4")
+            while video_ai.state.name == "PROCESSING":
+                time.sleep(2)
+                video_ai = genai.get_file(video_ai.name)
+            
+            # Generate the Justice Novel
+            st.write("✍️ Writing the 'Series Ender' Perspective...")
+            prompt = f"""
+            You are Roman Russo's defense attorney and novelist. 
+            Use this transcript: {transcript_input}
+            And the uploaded video.
+            
+            1. Match speaker names to faces.
+            2. Focus on Episode 3: How Roman is ignored while Billie 'steals' Winter.
+            3. Highlight Roman's discipline—he found the wand, he stayed calm during the Phantomus.
+            4. Write a YA Novel chapter from Roman's POV.
+            5. Add a 'Tribunal Record' at the end proving Roman is the true heir.
+            """
+            
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            response = model.generate_content([video_ai, prompt])
+            
+            status.update(label="✅ Novel Complete!", state="complete")
 
-        # STEP 3: GEMINI VISUAL SYNC
-        st.info("👁️ Gemini is watching the video to find the bias...")
-        video_ai = genai.upload_file(path=v_file)
-        while video_ai.state.name == "PROCESSING":
-            time.sleep(2)
-            video_ai = genai.get_file(video_ai.name)
-
-        # STEP 4: JUSTICE PROMPT (The "Roman Russo" Special)
-        prompt = f"""
-        You are a novel writer specializing in fixing character bias.
+        # --- 5. RESULTS ---
+        st.markdown(response.text)
         
-        INPUT DATA:
-        1. Transcript (Truth): {transcript_content}
-        2. Audio (Whisper): {verbatim_text}
-        3. Video: Provided file.
-        
-        DIRECTIONS:
-        - Match the 'Forever Dreaming' transcript names to the video faces.
-        - Identify every time Roman is ignored (e.g., when Winter is 'stolen' or Justin dismisses him).
-        - Write a NOVEL CHAPTER from ROMAN'S POV for Episode 3.
-        - Show Roman's internal logic: He knows the Phantomus is dangerous while everyone else is playing.
-        - ENDING: Write a 'Tribunal Teaser' where Roman's discipline is noted by the High Wizards.
-        
-        OUTPUT FORMAT:
-        ## NOVEL: ROMAN'S PERSPECTIVE
-        [The Chapter]
-        ---
-        ## SYNCED SCRIPT
-        [Speaker Names: Dialogue]
-        """
-
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        result = model.generate_content([video_ai, prompt])
-
-        # --- DISPLAY RESULTS ---
-        st.markdown(result.text)
-        
-        # Word Doc Export
+        # Word Doc Export for your phone
         doc = Document()
-        doc.add_heading("Wizards Beyond: The Roman Russo Record", 0)
-        doc.add_paragraph(result.text)
-        buffer = BytesIO()
-        doc.save(buffer)
-        st.download_button("📥 Download Novel Archive", buffer.getvalue(), "Roman_Justice_Ep3.docx")
-        
-        # Clean up
+        doc.add_heading("Wizards Beyond: Roman's Justice", 0)
+        doc.add_paragraph(response.text)
+        bio = BytesIO()
+        doc.save(bio)
+        st.download_button("📥 Save Novel to Phone", data=bio.getvalue(), file_name="Roman_Ep3_Novel.docx")
+
+        # Cleanup
         genai.delete_file(video_ai.name)
-                   
