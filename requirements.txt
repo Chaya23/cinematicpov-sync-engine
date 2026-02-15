@@ -4,3 +4,6 @@ openai
 yt-dlp
 python-docx
 python-dotenv
+streamlit-webrtc
+av
+
