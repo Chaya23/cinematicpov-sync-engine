@@ -3,3 +3,4 @@ google-generativeai
 openai
 yt-dlp
 python-docx
+python-dotenv
