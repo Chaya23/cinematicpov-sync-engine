@@ -1,111 +1,100 @@
 import streamlit as st
 import google.generativeai as genai
-import subprocess
 import time
-import os
 from docx import Document
 from io import BytesIO
 
-# 1. SETUP
-st.set_page_config(page_title="Wizards Fanfic Master Studio", layout="wide")
+# 1. MOBILE-FIRST UI CONFIG
+st.set_page_config(page_title="Roman Russo Studio", layout="centered") # Centered is better for mobile
+
+# 2. POWERFUL MODEL SETUP
+# We use Gemini 2.5 Flash for the 1M token window (perfect for 23min videos)
 API_KEY = st.secrets.get("GEMINI_API_KEY")
 if API_KEY:
     genai.configure(api_key=API_KEY)
 
-# Persistence
+# Persistence logic
 if "transcript" not in st.session_state: st.session_state.transcript = ""
 if "chapter" not in st.session_state: st.session_state.chapter = ""
 
-# 2. THE DOCUMENT & DOWNLOAD ENGINE
-def create_docx(title, text):
+# 3. SEPARATE DOCUMENT CREATOR
+def create_docx(title, content):
     doc = Document()
     doc.add_heading(title, 0)
-    doc.add_paragraph(text)
+    doc.add_paragraph(content)
     bio = BytesIO()
     doc.save(bio)
     return bio.getvalue()
 
-def download_video(url, cookie_file=None):
-    out = "episode_full.mp4"
-    # Basic command for yt-dlp
-    cmd = ["yt-dlp", "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4", "-o", out, url]
-    if cookie_file:
-        cmd.extend(["--cookies", cookie_file])
-    subprocess.run(cmd, check=True)
-    return out
-
-# 3. SIDEBAR: CUSTOM FANFIC & POV EDIT
+# 4. SIDEBAR (Fixed for Mobile responsiveness)
 with st.sidebar:
-    st.header("🎭 Fanfic Editor")
-    pov_choice = st.selectbox("Narrator POV:", ["Roman Russo", "Justin", "Billie", "Alex"])
-    genre = st.selectbox("Style:", ["General Fiction", "Angst", "Action", "Comedy"])
+    st.header("📝 Production Desk")
+    cast_list = st.text_area("Correct Cast Roles:", 
+        "Giada: Mother\nTheresa: Grandmother\nJustin: Father\nRoman: Protagonist")
+    pov = st.selectbox("Story POV:", ["Roman Russo", "Justin", "Billie"])
     
     st.divider()
-    st.header("🔑 Login Access")
-    cookie_txt = st.file_uploader("Upload cookies.txt for Disney+/YT", type=["txt"])
-    st.info("Use a browser extension to export Netscape format cookies.")
+    st.info("💡 Tip: Upload your cookies.txt here if recording from a protected site.")
 
-# 4. LIVE RECORDING & URL INPUT
-st.title("🧙‍♂️ Roman's Redemption: Ultimate Studio")
-url_input = st.text_input("Paste Video URL (YouTube/Disney+):", placeholder="https://...")
-up_file = st.file_uploader("OR Upload Video Manually", type=["mp4", "mov"])
+# 5. MAIN APP
+st.title("🧙‍♂️ Roman Russo Story")
+up_file = st.file_uploader("Upload Video", type=["mp4", "mov"])
 
-with st.expander("🎙️ Live Plot Recording"):
-    audio_note = st.audio_input("Record your thoughts for the AI to include:")
-    custom_hooks = st.text_area("Specific Scene Requests:", "Make Roman realize his worth without the magic shirt.")
+if up_file and st.button("🔥 Generate Productions"):
+    with st.status("🎬 Processing Episode...") as status:
+        # Saving locally for upload
+        with open("temp_vid.mp4", "wb") as f:
+            f.write(up_file.getbuffer())
+        
+        # Using Gemini 2.5 Flash
+        model = genai.GenerativeModel('models/gemini-2.5-flash')
+        video_file = genai.upload_file(path="temp_vid.mp4")
+        
+        while video_file.state.name == "PROCESSING":
+            time.sleep(5)
+            video_file = genai.get_file(video_file.name)
 
-# 5. PRODUCTION
-if st.button("🔥 Generate Full Production"):
-    try:
-        with st.status("🚀 Processing Full 23-Minute Episode...") as status:
-            # Step A: Get the File
-            if up_file:
-                video_path = "manual_upload.mp4"
-                with open(video_path, "wb") as f: f.write(up_file.getbuffer())
-            else:
-                c_path = "cookies.txt" if cookie_txt else None
-                if cookie_txt:
-                    with open(c_path, "wb") as f: f.write(cookie_txt.getbuffer())
-                video_path = download_video(url_input, c_path)
+        prompt = f"""
+        Role: Professional Scriptwriter and Novelist.
+        Cast: {cast_list}
+        
+        Task 1: Generate a FULL verbatim transcript.
+        Task 2: Write a 2500-word chapter from {pov}'s POV.
+        
+        IMPORTANT: Return the output with the marker '---SPLIT---' between Task 1 and Task 2.
+        """
+        
+        response = model.generate_content([video_file, prompt])
+        
+        # Splitting into separate storage
+        if "---SPLIT---" in response.text:
+            parts = response.text.split("---SPLIT---")
+            st.session_state.transcript = parts[0]
+            st.session_state.chapter = parts[1]
+        
+        status.update(label="✅ Success!", state="complete")
 
-            # Step B: AI Upload
-            model = genai.GenerativeModel('models/gemini-2.5-flash')
-            vid_file = genai.upload_file(path=video_path)
-            while vid_file.state.name == "PROCESSING":
-                time.sleep(8)
-                vid_file = genai.get_file(vid_file.name)
-
-            # Step C: The Mega Prompt
-            prompt = f"""
-            Identify all characters. 
-            TASK 1: FULL TRANSCRIPT. Transcribe all 23 minutes. Labeled [Time] Name: Dialogue.
-            TASK 2: NOVEL CHAPTER. Write a deep-POV chapter for {pov_choice} in {genre} style.
-            Include Roman's internal thoughts and interactions. Use these notes: {custom_hooks}
-            """
-            
-            response = model.generate_content([vid_file, prompt])
-            
-            # Logic to split transcript and chapter
-            if "TASK 2" in response.text:
-                parts = response.text.split("TASK 2")
-                st.session_state.transcript = parts[0]
-                st.session_state.chapter = parts[1]
-            else:
-                st.session_state.chapter = response.text
-            
-            status.update(label="✅ Masterpiece Ready!", state="complete")
-    except Exception as e:
-        st.error(f"Error: {e}")
-
-# 6. DOWNLOADS
-if st.session_state.chapter:
-    st.divider()
+# 6. SEPARATE DOWNLOAD BUTTONS (Mobile Friendly)
+if st.session_state.transcript:
+    st.success("Your files are ready for separate download:")
+    
+    # Using columns to put buttons side-by-side on desktop, stack on mobile
     col1, col2 = st.columns(2)
+    
     with col1:
-        st.subheader("📝 Complete Transcript")
-        st.download_button("📥 Download .docx", create_docx("Full Transcript", st.session_state.transcript), "transcript.docx")
-        st.text_area("View", st.session_state.transcript, height=300)
+        st.download_button(
+            label="📥 Download Transcript",
+            data=create_docx("Full Episode Transcript", st.session_state.transcript),
+            file_name="Episode_Transcript.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True
+        )
+
     with col2:
-        st.subheader(f"📖 {pov_choice}'s Chapter")
-        st.download_button("📥 Download .docx", create_docx(f"{pov_choice} Story", st.session_state.chapter), "chapter.docx")
-        st.text_area("View", st.session_state.chapter, height=300)
+        st.download_button(
+            label="📥 Download Novel Chapter",
+            data=create_docx(f"{pov} Chapter", st.session_state.chapter),
+            file_name="Novel_Chapter.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True
+        )
