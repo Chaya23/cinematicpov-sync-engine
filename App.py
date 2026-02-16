@@ -9,7 +9,7 @@ from io import BytesIO
 st.set_page_config(page_title="Roman's Master Studio", layout="wide")
 
 # API KEY SETUP
-api_key = st.secrets.get("GEMINI_API_KEY", "AIzaSyDkpF4EvYNYFNe5q0UTA1_0NBE3YykfhSY")
+api_key = st.secrets.get("GEMINI_API_KEY", 
 genai.configure(api_key=api_key)
 
 # PERSISTENCE
