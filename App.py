@@ -6,11 +6,12 @@ import subprocess
 from docx import Document
 from io import BytesIO
 import os
+import whisper
 
-# 1. STUDIO CONFIG
+# ---------- CONFIG ----------
+
 st.set_page_config(page_title="Roman's Master Studio", layout="wide")
 
-# API KEY SETUP
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 api_key = api_key.strip() if api_key else ""
 if api_key:
@@ -19,13 +20,16 @@ else:
     st.error("🔑 API Key missing from Secrets.")
     st.stop()
 
-# PERSISTENCE
-if "transcript" not in st.session_state:
-    st.session_state.transcript = ""
+if "transcript_raw" not in st.session_state:
+    st.session_state.transcript_raw = ""
+if "transcript_tagged" not in st.session_state:
+    st.session_state.transcript_tagged = ""
 if "chapter" not in st.session_state:
     st.session_state.chapter = ""
 if "processed" not in st.session_state:
     st.session_state.processed = False
+
+# ---------- HELPERS ----------
 
 def create_docx(title, content):
     doc = Document()
@@ -57,14 +61,38 @@ def get_safety_settings():
     ]
 
 def clean_temp_files():
-    for f in ["temp_video.mp4"]:
+    for f in ["temp_video.mp4", "temp_audio.mp3", "cookies.txt"]:
         if os.path.exists(f):
             try:
                 os.remove(f)
             except Exception:
                 pass
 
-# 2. SIDEBAR: PRODUCTION BIBLE & SETTINGS
+def extract_audio(video_path, audio_path="temp_audio.mp3"):
+    if os.path.exists(audio_path):
+        os.remove(audio_path)
+    cmd = ["ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "mp3", audio_path]
+    subprocess.run(cmd, check=True)
+    return audio_path
+
+def whisper_transcribe(audio_path):
+    model = whisper.load_model("base")
+    result = model.transcribe(audio_path)
+    return result.get("text", "").strip()
+
+def get_gemini_model():
+    available_models = [
+        m.name
+        for m in genai.list_models()
+        if hasattr(m, "supported_generation_methods")
+        and "generateContent" in m.supported_generation_methods
+    ]
+    flash_models = [m for m in available_models if "flash" in m.lower()]
+    selected_model = flash_models[0] if flash_models else "models/gemini-1.5-flash"
+    return genai.GenerativeModel(selected_model)
+
+# ---------- SIDEBAR ----------
+
 with st.sidebar:
     st.header("🎭 Character Bible")
     cast_info = st.text_area(
@@ -72,7 +100,6 @@ with st.sidebar:
         "Giada: Mother\nJustin: Father\nRoman: Protagonist\nTheresa: Grandmother"
     )
 
-    # Parse cast names from the cast_info
     cast_lines = [line.strip() for line in cast_info.splitlines() if line.strip()]
     cast_names = []
     for line in cast_lines:
@@ -82,10 +109,8 @@ with st.sidebar:
                 cast_names.append(name)
 
     st.header("👤 POV & Focus Characters")
-    pov_options = ["Custom"]
-    pov_options.extend(cast_names)
+    pov_options = ["Custom"] + cast_names
     pov_choice = st.selectbox("Primary Narrator POV:", pov_options)
-
     if pov_choice == "Custom":
         pov_choice = st.text_input("Enter Custom Narrator Name:", value="Roman Russo")
 
@@ -95,67 +120,50 @@ with st.sidebar:
         default=cast_names
     )
 
-    st.header("🌐 Bypass Tools")
+    st.header("🌐 Bypass / Download")
     cookie_file = st.file_uploader("Upload cookies.txt (For Disney/Region bypass)", type=["txt"])
     geo_bypass = st.checkbox("Force Geo-Bypass (US)", value=True)
 
     st.divider()
     if st.button("🗑️ Reset Studio"):
-        st.session_state.transcript = ""
+        st.session_state.transcript_raw = ""
+        st.session_state.transcript_tagged = ""
         st.session_state.chapter = ""
         st.session_state.processed = False
         clean_temp_files()
         st.rerun()
 
-# 3. TABS: INPUT METHODS
+# ---------- INPUT TABS ----------
+
 tab_up, tab_url, tab_live = st.tabs(["📁 File Upload", "🌐 URL Sync", "🎙️ Live Notes"])
 
 with tab_up:
     file_vid = st.file_uploader("Upload MP4/MOV", type=["mp4", "mov"])
 
 with tab_url:
-    url_link = st.text_input("Paste DisneyNow/YouTube URL:")
+    url_link = st.text_input("Paste Disney+/DisneyNow/YouTube URL:")
 
 with tab_live:
     live_notes = st.text_area("Live Production Notes:", placeholder="Add plot twists here...")
 
-# 4. PRODUCTION ENGINE
+# ---------- MAIN BUTTON ----------
+
 if st.button("🚀 START PRODUCTION", use_container_width=True):
     if not file_vid and not url_link:
         st.error("Please upload a video file or provide a URL before starting production.")
     else:
-        with st.status("🎬 Cloud Processing & Novel Generation...") as status:
+        with st.status("🎬 Whisper + Gemini pipeline running...") as status:
             try:
-                status.update(label="🔍 Resolving Gemini model...", state="running")
-                # DYNAMIC MODEL RESOLVER
-                available_models = [
-                    m.name
-                    for m in genai.list_models()
-                    if hasattr(m, "supported_generation_methods")
-                    and "generateContent" in m.supported_generation_methods
-                ]
-                flash_models = [m for m in available_models if "flash" in m.lower()]
-                selected_model = flash_models[0] if flash_models else "models/gemini-1.5-flash"
-                model = genai.GenerativeModel(selected_model)
-                safety_settings = get_safety_settings()
-
-                # STORAGE CLEANUP (Gemini file store)
-                try:
-                    for f in genai.list_files():
-                        genai.delete_file(f.name)
-                except Exception:
-                    pass
-
-                source = "temp_video.mp4"
+                status.update(label="⬇️ Downloading / saving video...", state="running")
                 clean_temp_files()
+                source = "temp_video.mp4"
 
-                status.update(label="⬇️ Downloading / saving video (yt-dlp/local)...", state="running")
-                # --- DOWNLOAD / SAVE VIDEO ---
+                # Download or save video
                 if file_vid:
                     with open(source, "wb") as f:
                         f.write(file_vid.getbuffer())
                 elif url_link:
-                    ydl_cmd = ["yt-dlp", "-f", "best[ext=mp4]", "-o", source]
+                    ydl_cmd = ["yt-dlp", "-f", "best", "-o", source]
                     if geo_bypass:
                         ydl_cmd.extend(["--geo-bypass", "--geo-bypass-country", "US"])
                     if cookie_file:
@@ -165,62 +173,54 @@ if st.button("🚀 START PRODUCTION", use_container_width=True):
                     ydl_cmd.append(url_link)
                     subprocess.run(ydl_cmd, check=True)
 
-                status.update(label="📤 Uploading video to Gemini (cloud watch)...", state="running")
-                genai_file = genai.upload_file(path=source)
+                # ---------- STAGE 1: WHISPER TRANSCRIPTION ----------
+                status.update(label="🎧 Extracting audio & transcribing with Whisper...", state="running")
+                audio_path = extract_audio(source)
+                transcript_raw = whisper_transcribe(audio_path)
 
-                # Wait for file processing in cloud
-                while getattr(genai_file, "state", None) and genai_file.state.name == "PROCESSING":
-                    time.sleep(5)
-                    genai_file = genai.get_file(genai_file.name)
-
-                if not hasattr(genai_file, "uri"):
-                    st.error("Gemini did not return a valid file URI. Video may be unsupported or blocked.")
+                if not transcript_raw or len(transcript_raw) < 50:
+                    st.error("Transcript is empty or too short. Try a different video or check the audio.")
                     clean_temp_files()
                     st.stop()
 
-                file_uri = genai_file.uri
+                st.session_state.transcript_raw = transcript_raw
 
-                # ---------- STAGE 1: CLOUD TRANSCRIPT WITH SPEAKERS ----------
-                status.update(label="📝 Gemini watching video & transcribing (who said what)...", state="running")
+                # ---------- STAGE 2: GEMINI TAGS EACH LINE WITH SPEAKER ----------
+                status.update(label="📝 Gemini tagging each line with speaker names...", state="running")
+                model = get_gemini_model()
+                safety_settings = get_safety_settings()
 
-                transcript_prompt = f"""
-You are given a video file hosted in the cloud.
-
-<VIDEO_FILE_URI>
-{file_uri}
-</VIDEO_FILE_URI>
+                speaker_prompt = f"""
+You are a careful dialogue editor.
 
 CAST (name: role):
 {cast_info}
 
+RAW TRANSCRIPT (no speaker tags, may be messy):
+\"\"\"{transcript_raw}\"\"\"
+
 TASK:
-1. Watch/listen to the entire video.
-2. Produce a detailed transcript of the dialogue and important on-screen text.
-3. For each line of dialogue, clearly tag who is speaking using the character names from the cast list when possible.
-   - Format like: "Roman: I don't know if I can do this."
+1. Rewrite the transcript as clean dialogue lines.
+2. For each line of speech, clearly tag the speaker using the character names from the cast list when possible.
+   - Format: "Roman: I don't know if I can do this."
    - If you're not sure, use "Unknown:" but try to infer from context.
-4. Keep line breaks natural. Do NOT summarize. Do NOT add commentary.
+3. Keep the wording as close to the original as possible, only fixing obvious transcription errors.
+4. Preserve line breaks. Do NOT summarize. Do NOT add commentary.
 """
 
-                transcript_response = model.generate_content(
-                    contents=transcript_prompt,
+                speaker_response = model.generate_content(
+                    contents=speaker_prompt,
                     safety_settings=safety_settings,
                 )
+                transcript_tagged = (speaker_response.text or "").strip() if speaker_response else ""
 
-                transcript_text = (transcript_response.text or "").strip() if transcript_response else ""
+                if not transcript_tagged or len(transcript_tagged) < 50:
+                    transcript_tagged = transcript_raw  # fallback
 
-                if not transcript_text or len(transcript_text) < 50:
-                    st.error(
-                        "Gemini returned an empty or very short transcript. "
-                        "If this is a streaming/DRM video, it may be blocked."
-                    )
-                    clean_temp_files()
-                    st.stop()
+                st.session_state.transcript_tagged = transcript_tagged
 
-                st.session_state.transcript = transcript_text
-
-                # ---------- STAGE 2: YA NOVEL CHAPTER ----------
-                status.update(label="📖 Generating YA-style novel chapter from transcript...", state="running")
+                # ---------- STAGE 3: GEMINI WRITES YA NOVEL CHAPTER ----------
+                status.update(label="📖 Gemini writing YA-style novel chapter from POV...", state="running")
 
                 focus_characters_str = ", ".join(focus_characters) if focus_characters else "all characters"
 
@@ -239,8 +239,8 @@ FOCUS CHARACTERS:
 DIRECTOR NOTES:
 {live_notes}
 
-SOURCE TRANSCRIPT (with speaker tags):
-\"\"\"{transcript_text}\"\"\"
+SOURCE TRANSCRIPT (each line tagged with speaker):
+\"\"\"{transcript_tagged}\"\"\"
 
 TASK:
 Using the transcript as the backbone, write a ~2500-word YA-style novel chapter.
@@ -250,7 +250,7 @@ REQUIREMENTS:
 - Show rich internal thoughts, emotions, and reactions of {pov_choice}.
 - Use the speaker tags to keep who-said-what consistent with the transcript.
 - Include interactions and dialogue with the other characters, especially: {focus_characters_str}.
-- Keep the tone grounded, emotional, and character-driven, like a YA contemporary or YA drama.
+- Keep the tone grounded, emotional, and character-driven, like a YA contemporary / young adult novel.
 - Preserve the key events and emotional beats from the transcript, but you may add internal monologue, sensory detail, and subtle expansions.
 - Make Giada explicitly the mother (if she appears).
 - Do NOT include analysis, explanation, or meta-commentary. Output ONLY the story text.
@@ -260,7 +260,6 @@ REQUIREMENTS:
                     contents=novel_prompt,
                     safety_settings=safety_settings,
                 )
-
                 chapter_text = (novel_response.text or "").strip() if novel_response else ""
 
                 if not chapter_text or len(chapter_text) < 100:
@@ -271,28 +270,29 @@ REQUIREMENTS:
                 st.session_state.chapter = chapter_text
                 st.session_state.processed = True
 
-                status.update(label="✅ Cloud production complete!", state="complete")
+                status.update(label="✅ Production complete! (Whisper + Gemini)", state="complete")
                 clean_temp_files()
                 st.rerun()
 
             except subprocess.CalledProcessError as e:
-                st.error(f"Download error (yt-dlp / ffmpeg): {e}")
+                st.error(f"Download / ffmpeg error: {e}")
                 clean_temp_files()
             except Exception as e:
                 st.error(f"Error: {e}")
                 clean_temp_files()
 
-# 5. RESULTS HUB
+# ---------- RESULTS HUB ----------
+
 if st.session_state.processed:
     st.divider()
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("📜 Transcript (with speakers)")
-        st.text_area("T-Preview", st.session_state.transcript, height=450)
+        st.subheader("📜 Transcript (speaker-tagged)")
+        st.text_area("T-Preview", st.session_state.transcript_tagged, height=450)
         st.download_button(
             "📥 Save Transcript (Word)",
-            create_docx("Transcript", st.session_state.transcript),
+            create_docx("Transcript", st.session_state.transcript_tagged),
             "Transcript.docx",
         )
 
@@ -304,3 +304,4 @@ if st.session_state.processed:
             create_docx(f"{pov_choice} Chapter", st.session_state.chapter),
             "Novel.docx",
         )
+
