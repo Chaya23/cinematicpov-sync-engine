@@ -10,7 +10,7 @@ import whisper
 
 # ---------------- CONFIG ----------------
 
-st.set_page_config(page_title="Cinematic POV Story Engine", layout="wide")
+st.set_page_config(page_title="Cinematic POV Story Engine (Audio Only)", layout="wide")
 
 # Gemini API key (set in Streamlit secrets)
 api_key = st.secrets.get("GEMINI_API_KEY", "")
@@ -68,7 +68,7 @@ def get_safety_settings():
 
 
 def clean_temp_files():
-    for f in ["temp_video.mp4", "temp_audio.mp3", "cookies.txt"]:
+    for f in ["temp_audio_source", "temp_audio.mp3", "cookies.txt"]:
         if os.path.exists(f):
             try:
                 os.remove(f)
@@ -76,10 +76,13 @@ def clean_temp_files():
                 pass
 
 
-def extract_audio(video_path: str, audio_path: str = "temp_audio.mp3") -> str:
+def extract_audio(input_path: str, audio_path: str = "temp_audio.mp3") -> str:
+    """
+    Takes any media file (audio or video) and converts it to MP3.
+    """
     if os.path.exists(audio_path):
         os.remove(audio_path)
-    cmd = ["ffmpeg", "-y", "-i", video_path, "-vn", "-acodec", "mp3", audio_path]
+    cmd = ["ffmpeg", "-y", "-i", input_path, "-vn", "-acodec", "mp3", audio_path]
     subprocess.run(cmd, check=True)
     return audio_path
 
@@ -117,6 +120,25 @@ def upload_audio_to_gemini(audio_path: str):
         return None
 
 
+def download_audio_only(url: str, cookie_file) -> str:
+    """
+    Uses yt-dlp to download audio-only stream from a URL.
+    Output is saved as 'temp_audio_source'.
+    """
+    out_path = "temp_audio_source"
+    if os.path.exists(out_path):
+        os.remove(out_path)
+
+    cmd = ["yt-dlp", "-f", "bestaudio", "-o", out_path]
+    if cookie_file:
+        with open("cookies.txt", "wb") as f:
+            f.write(cookie_file.getbuffer())
+        cmd.extend(["--cookies", "cookies.txt"])
+    cmd.append(url)
+    subprocess.run(cmd, check=True)
+    return out_path
+
+
 # ---------------- SIDEBAR ----------------
 
 with st.sidebar:
@@ -147,9 +169,8 @@ with st.sidebar:
         default=cast_names,
     )
 
-    st.header("🌐 Download options")
+    st.header("🌐 URL audio options")
     cookie_file = st.file_uploader("cookies.txt (optional, for Disney/region)", type=["txt"])
-    geo_bypass = st.checkbox("Force geo-bypass (US)", value=True)
 
     st.divider()
     if st.button("🗑️ Reset project"):
@@ -161,20 +182,42 @@ with st.sidebar:
 
 # ---------------- MAIN UI ----------------
 
-st.title("🎬 Cinematic POV Story Engine")
-st.write(
-    "Upload a video or paste a streaming URL. The app will transcribe the audio, "
-    "summarise the plot, tag who said what using your cast list, and write a YA-style "
-    "novel chapter from your chosen POV."
+st.title("🎬 Cinematic POV Story Engine – Audio Only")
+
+st.markdown(
+    """
+**What this app does**
+
+1. You give it **audio** from a show or movie:
+   - Paste a streaming URL (DisneyNow, Disney+, YouTube, etc.) – it downloads **audio only**, or  
+   - Upload a file (PlayOn recording, screen recording, or any audio/video file), or  
+   - Upload a **live recording** from your phone’s recorder app.
+
+2. It converts everything to MP3 and uses **Whisper** to transcribe the audio as accurately as possible.
+
+3. **Gemini** then:
+   - Listens to the audio  
+   - Reads the transcript  
+   - Creates a detailed **plot summary**  
+   - Uses your **cast list** to tag **who said what** line by line  
+   - Writes a **YA-style novel chapter** from your chosen POV.
+
+4. You can download:
+   - The **speaker-tagged transcript** (Word)  
+   - The **novel chapter** (Word)
+"""
 )
 
-tab_file, tab_url, tab_notes = st.tabs(["📁 File upload", "🌐 URL input", "📝 Live notes"])
-
-with tab_file:
-    file_vid = st.file_uploader("Upload MP4/MOV (PlayOn, YouTube downloads, etc.)", type=["mp4", "mov"])
+tab_url, tab_file, tab_notes = st.tabs(["🌐 URL (audio only)", "📁 File upload / live recording", "📝 Writer notes"])
 
 with tab_url:
-    url_link = st.text_input("Paste video URL (Disney+, DisneyNow, YouTube, etc.):")
+    url_link = st.text_input("Paste video/audio URL (Disney+, DisneyNow, YouTube, etc.):")
+
+with tab_file:
+    file_media = st.file_uploader(
+        "Upload audio or video (PlayOn MP4, screen recording, MP3, WAV, etc.)",
+        type=["mp4", "mov", "mkv", "mp3", "wav", "m4a", "aac"],
+    )
 
 with tab_notes:
     live_notes = st.text_area(
@@ -186,40 +229,40 @@ with tab_notes:
 
 # ---------------- PIPELINE BUTTON ----------------
 
-if st.button("🚀 Run full pipeline", use_container_width=True):
-    if not file_vid and not url_link:
-        st.error("Please upload a video file or provide a URL.")
+if st.button("🚀 Run full audio pipeline", use_container_width=True):
+    if not file_media and not url_link:
+        st.error("Please upload a file or provide a URL.")
     else:
-        with st.status("Running Whisper + Gemini pipeline...", expanded=True) as status:
+        with st.status("Running audio → Whisper → Gemini pipeline...", expanded=True) as status:
             try:
                 clean_temp_files()
-                source = "temp_video.mp4"
 
-                # 1. Download or save video
-                status.update(label="⬇️ Downloading / saving video...", state="running")
-                if file_vid:
-                    with open(source, "wb") as f:
-                        f.write(file_vid.getbuffer())
+                # 1. Get audio source (URL or file)
+                status.update(label="⬇️ Getting audio source...", state="running")
+
+                if url_link:
+                    # Audio-only download via yt-dlp
+                    try:
+                        source_audio = download_audio_only(url_link, cookie_file)
+                    except subprocess.CalledProcessError as e:
+                        st.error(f"yt-dlp audio download failed: {e}")
+                        clean_temp_files()
+                        st.stop()
                 else:
-                    cmd = ["yt-dlp", "-f", "best", "-o", source]
-                    if geo_bypass:
-                        cmd.extend(["--geo-bypass", "--geo-bypass-country", "US"])
-                    if cookie_file:
-                        with open("cookies.txt", "wb") as f:
-                            f.write(cookie_file.getbuffer())
-                        cmd.extend(["--cookies", "cookies.txt"])
-                    cmd.append(url_link)
-                    subprocess.run(cmd, check=True)
+                    # Save uploaded file as temp_audio_source
+                    source_audio = "temp_audio_source"
+                    with open(source_audio, "wb") as f:
+                        f.write(file_media.getbuffer())
 
-                # 2. Extract audio
-                status.update(label="🎧 Extracting audio with ffmpeg...", state="running")
-                audio_path = extract_audio(source)
+                # 2. Convert to MP3 (ffmpeg)
+                status.update(label="🎧 Converting to MP3 with ffmpeg...", state="running")
+                audio_path = extract_audio(source_audio, "temp_audio.mp3")
 
                 # 3. Whisper transcription
                 status.update(label="📝 Transcribing audio with Whisper...", state="running")
                 transcript_raw = whisper_transcribe(audio_path)
                 if not transcript_raw or len(transcript_raw) < 50:
-                    st.error("Transcript is empty or too short. Check the audio or try another video.")
+                    st.error("Transcript is empty or too short. Check the audio or try another file/URL.")
                     clean_temp_files()
                     st.stop()
                 st.session_state.transcript_raw = transcript_raw
@@ -228,11 +271,11 @@ if st.button("🚀 Run full pipeline", use_container_width=True):
                 model = get_gemini_model()
                 safety = get_safety_settings()
 
-                # 5. Upload audio to Gemini (for non-DRM / when possible)
-                status.update(label="📤 Uploading audio to Gemini (if supported)...", state="running")
+                # 5. Upload audio to Gemini (so it can LISTEN)
+                status.update(label="📤 Uploading audio to Gemini...", state="running")
                 audio_file_obj = upload_audio_to_gemini(audio_path)
 
-                # 6. Plot summary (Gemini listens + reads when possible)
+                # 6. Plot summary (Gemini listens + reads)
                 status.update(label="📚 Generating plot summary...", state="running")
 
                 if audio_file_obj is not None:
@@ -248,8 +291,8 @@ RAW TRANSCRIPT:
 \"\"\"{transcript_raw}\"\"\"
 
 TASK:
-1. Listen to the audio and read the transcript.
-2. Produce a clear plot summary of what happens in the video.
+1. Listen carefully to the audio and read the transcript.
+2. Produce a clear plot summary of what happens in this audio.
 3. Mention key characters, relationships, conflicts, and emotional beats.
 4. Keep it 3–8 paragraphs, no bullet points, no meta commentary.
 """,
@@ -265,7 +308,7 @@ RAW TRANSCRIPT (audio could not be provided, so rely on text only):
 \"\"\"{transcript_raw}\"\"\"
 
 TASK:
-1. Produce a clear plot summary of what happens in the video.
+1. Produce a clear plot summary of what happens in this audio.
 2. Mention key characters, relationships, conflicts, and emotional beats.
 3. Keep it 3–8 paragraphs, no bullet points, no meta commentary.
 """
@@ -356,7 +399,7 @@ REQUIREMENTS:
                 )
                 chapter_text = (novel_resp.text or "").strip() if novel_resp else ""
                 if not chapter_text or len(chapter_text) < 100:
-                    st.error("Gemini returned an empty or very short chapter. Try a different video or shorter content.")
+                    st.error("Gemini returned an empty or very short chapter. Try a different audio or shorter content.")
                     clean_temp_files()
                     st.stop()
 
