@@ -1,58 +1,31 @@
 import streamlit as st
+from processor import run_compression, novelize_content
 import os
-import subprocess
-from dotenv import load_dotenv
-import google.generativeai as genai
-from streamlit_webrtc import webrtc_streamer
 
-# 1. SETUP & SECRETS
-load_dotenv()
-# This looks for your key in GitHub Secrets OR a local .env file
-API_KEY = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
+# Secrets Setup
+API_KEY = st.secrets.get("GEMINI_API_KEY")
 
-if API_KEY:
-    genai.configure(api_key=API_KEY)
-else:
-    st.error("Missing Gemini API Key! Add it to Streamlit Secrets.")
+st.set_page_config(page_title="Roman's Redemption", layout="centered")
+st.title("🧙‍♂️ Roman's Redemption Studio")
 
-# 2. MOBILE-FIRST UI
-st.set_page_config(page_title="Roman's Redemption", page_icon="🪄")
-st.title("🧙‍♂️ Roman's Redemption")
-st.caption("Mobile Studio v2.0 - Unlimited Edition")
+tab1, tab2 = st.tabs(["🔗 Link/Download", "📱 Upload DVR"])
 
-# --- TABBED NAVIGATION ---
-tab1, tab2, tab3 = st.tabs(["🔗 Links", "📱 Live DVR", "📂 Upload"])
-
-# TAB 1: DISNEY NOW / YOUTUBE DOWNLOADER
 with tab1:
-    st.subheader("Process Link")
-    video_url = st.text_input("Paste Disney Now or YT URL:")
-    if st.button("Download & Novelize"):
-        with st.status("🎬 Extracting magic from link...") as s:
-            # -x extracts audio only to save space/time
-            cmd = ["yt-dlp", "-x", "--audio-format", "mp3", "-o", "source_audio.mp3", video_url]
-            subprocess.run(cmd)
-            s.update(label="✅ Audio Captured. Writing chapter...", state="complete")
-        st.success("Roman's POV is being generated...")
+    url = st.text_input("Paste Disney Now Link:")
+    if st.button("Download & Process"):
+        st.info("🛰️ Downloading in background. You can minimize the app now.")
+        # Background download logic
+        os.system(f"yt-dlp -f 'bestvideo[height<=480]+bestaudio' -o 'temp.mp4' {url}")
+        compressed = run_compression("temp.mp4")
+        result = novelize_content(compressed, API_KEY)
+        st.success(result)
 
-# TAB 2: LIVE MOBILE DVR (Quiet Recording)
 with tab2:
-    st.subheader("Mobile DVR")
-    st.write("Record directly into the app. (Requires HTTPS)")
-    # This captures video/audio directly from your phone's camera
-    webrtc_streamer(
-        key="mobile-dvr",
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-        media_stream_constraints={"video": True, "audio": True}
-    )
-
-# TAB 3: UNLIMITED UPLOAD
-with tab3:
-    st.subheader("Local File Upload")
-    st.info("Limit: 10GB (Set in config.toml)")
-    up_file = st.file_uploader("Upload Movie:", type=["mp4", "mov", "mkv"])
+    up_file = st.file_uploader("Upload 4K Record", type=["mp4", "mov"])
     if up_file:
-        st.write(f"📂 File Ready: {up_file.name}")
-        if st.button("Start AI Production"):
-            # Process the file here
-            st.toast("Transcribing... this takes a few minutes.")
+        with open("raw_up.mp4", "wb") as f:
+            f.write(up_file.getbuffer())
+        if st.button("Compress & Sync"):
+            with st.spinner("Compressing..."):
+                compressed = run_compression("raw_up.mp4")
+                st.write("✅ Ready for Gemini!")
