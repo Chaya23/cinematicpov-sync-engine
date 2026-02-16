@@ -10,7 +10,7 @@ from io import BytesIO
 st.set_page_config(page_title="Roman's Master Studio", layout="wide")
 
 # API KEY SETUP
-API_KEY = st.secrets.get("GEMINI_API_KEY")
+API_KEY = st.secrets.get(" AIzaSyDkpF4EvYNYFNe5q0UTA1_0NBE3YykfhSY ")
 if API_KEY:
     genai.configure(api_key=API_KEY)
 
