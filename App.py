@@ -53,15 +53,15 @@ def get_safety_settings():
             "threshold": HarmBlockThreshold.BLOCK_NONE,
         },
         {
-            "category": HarmCategory.HATE_SPEECH,
+            "category": HarmCategory.HARM_CATEGORY_HATE_SPEECH,
             "threshold": HarmBlockThreshold.BLOCK_NONE,
         },
         {
-            "category": HarmCategory.SEXUALLY_EXPLICIT,
+            "category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
             "threshold": HarmBlockThreshold.BLOCK_NONE,
         },
         {
-            "category": HarmCategory.DANGEROUS_CONTENT,
+            "category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
             "threshold": HarmBlockThreshold.BLOCK_NONE,
         },
     ]
@@ -86,7 +86,8 @@ def extract_audio(input_path: str, audio_path: str = "temp_audio.mp3") -> str:
 
 
 def whisper_transcribe(audio_path: str) -> str:
-    model = whisper.load_model("base")
+    # High accuracy: use Whisper large
+    model = whisper.load_model("large")
     result = model.transcribe(audio_path)
     return result.get("text", "").strip()
 
@@ -179,13 +180,15 @@ st.title("🎬 Cinematic POV Story Engine – Audio Only")
 
 st.markdown(
     """
-**What this app does**
+This app turns real audio from shows or movies into a **YA-style POV novel chapter** using your own cast list.
+
+### 🔧 What it does
 
 1. You give it **audio** from a show or movie:
    - **Tab 1 – URL:** paste a streaming URL (DisneyNow, Disney+, YouTube, etc.) – it downloads **audio only**  
    - **Tab 2 – File upload:** upload a PlayOn recording, screen recording, or any audio/video file  
 
-2. It converts everything to MP3 and uses **Whisper** to transcribe the audio.
+2. It converts everything to MP3 and uses **Whisper (large)** to transcribe the audio as accurately as possible.
 
 3. **Gemini** then:
    - Listens to the audio  
@@ -199,6 +202,92 @@ st.markdown(
    - The **novel chapter** (Word)
 """
 )
+
+with st.expander("📖 How to use this app (step by step)"):
+    st.markdown(
+        """
+### 1️⃣ Set up your characters and POV (left sidebar)
+- Edit the **Character list** so it matches your show (e.g. `Giada: Mother`, `Roman: Protagonist`).
+- Choose a **POV narrator** (or type a custom name).
+- Pick which characters to **focus on** in the chapter.
+
+### 2️⃣ Choose how to give the app your audio
+
+**Option A – URL (Tab: “URL – audio only”)**
+- Paste a streaming URL (DisneyNow, Disney+, YouTube, etc.).
+- For **DisneyNow**, you **must** upload a `cookies.txt` file in the sidebar (see instructions below).
+
+**Option B – File upload (Tab: “File upload / live recording”)**
+- Upload a file from:
+  - PlayOn recordings  
+  - Screen recordings (phone or computer)  
+  - Voice memos / audio recordings  
+  - Any MP4, MOV, MKV, MP3, WAV, M4A, AAC  
+
+### 3️⃣ (Optional) Add writer notes
+- In the **Writer notes** tab, you can describe:
+  - Tone (soft, intense, funny, dark, etc.)
+  - Themes (family, grief, romance, etc.)
+  - What to emphasise in the chapter.
+
+### 4️⃣ Run the pipeline
+- Click **“🚀 Run full audio pipeline”**.
+- The app will:
+  1. Download or read the audio  
+  2. Convert to MP3  
+  3. Transcribe with Whisper (large)  
+  4. Generate a plot summary  
+  5. Tag who said what  
+  6. Write a YA-style POV chapter  
+
+### 5️⃣ Read and download results
+- Scroll down to see:
+  - **Plot summary**
+  - **Speaker-tagged transcript**
+  - **POV novel chapter**
+- Use the **Download** buttons to save Word files.
+
+### 🔁 If something fails
+- If you see a **yt-dlp** or **ffmpeg** error:
+  - For DisneyNow/Disney+, check `cookies.txt` or use **File upload** instead.
+- If the transcript is very short, try a different file or shorter clip.
+"""
+    )
+
+with st.expander("ℹ️ How to get cookies.txt for DisneyNow (required for URL mode)"):
+    st.markdown(
+        """
+DisneyNow uses short‑lived security tokens. To download audio from DisneyNow URLs, you **must** provide a `cookies.txt` file from your own device.  
+This file contains your **login session**, **region**, and **access tokens** so yt‑dlp can request a fresh playlist every time.
+
+### 📱 iPhone (Safari)
+1. Install the extension **“Get cookies.txt”** from the App Store.
+2. Open **Settings → Safari → Extensions** and enable it.
+3. Open Safari and go to **disneynow.com**.
+4. Log in and open the episode you want.
+5. Tap the **AA** icon → **Get cookies.txt** → **Export** → **Save to Files**.
+6. Upload the saved `cookies.txt` file in the sidebar.
+
+### 🤖 Android (Chrome or Kiwi Browser)
+1. Install the extension **“Get cookies.txt”** from the Chrome Web Store.
+2. Open **disneynow.com** and log in.
+3. Open the browser menu → **Extensions** → **Get cookies.txt**.
+4. Tap **Export** and save the file.
+5. Upload `cookies.txt` in the sidebar.
+
+### 🖥️ Windows / Mac (Chrome, Edge, Firefox)
+1. Install the extension **“Get cookies.txt”**.
+2. Go to **disneynow.com** and log in.
+3. Click the extension → **Export cookies for this site**.
+4. Save the file as `cookies.txt`.
+5. Upload it in the sidebar.
+
+### ❗ Important notes
+- The cookies file must come from **your own logged‑in device**.
+- Cookies expire — if downloads stop working, export a **fresh** `cookies.txt`.
+- If DisneyNow still fails, use the **File upload** tab instead (PlayOn recordings or screen recordings always work).
+"""
+    )
 
 tab_url, tab_file, tab_notes = st.tabs(
     ["🌐 URL (audio only)", "📁 File upload / live recording", "📝 Writer notes"]
@@ -247,7 +336,7 @@ if st.button("🚀 Run full audio pipeline", use_container_width=True):
                             f"yt-dlp audio download failed.\n\n"
                             f"Details: {e}\n\n"
                             "If this is a DisneyNow/Disney+ link, make sure cookies.txt is valid, "
-                            "or instead upload a PlayOn/screen recording file in the File Upload tab."
+                            "or instead upload a PlayOn/screen recording file in the File upload tab."
                         )
                         clean_temp_files()
                         st.stop()
@@ -262,7 +351,7 @@ if st.button("🚀 Run full audio pipeline", use_container_width=True):
                 audio_path = extract_audio(source_audio, "temp_audio.mp3")
 
                 # 3. Whisper transcription
-                status.update(label="📝 Transcribing audio with Whisper...", state="running")
+                status.update(label="📝 Transcribing audio with Whisper (large)...", state="running")
                 transcript_raw = whisper_transcribe(audio_path)
                 if not transcript_raw or len(transcript_raw) < 50:
                     st.error("Transcript is empty or too short. Check the audio or try another file/URL.")
