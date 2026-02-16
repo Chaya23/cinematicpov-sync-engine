@@ -10,9 +10,8 @@ import whisper
 
 # ---------------- CONFIG ----------------
 
-st.set_page_config(page_title="Cinematic POV Story Engine (Audio Only)", layout="wide")
+st.set_page_config(page_title="Cinematic POV Story Engine", layout="wide")
 
-# Gemini API key (set in Streamlit secrets)
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 api_key = api_key.strip() if api_key else ""
 if not api_key:
@@ -21,13 +20,14 @@ if not api_key:
 
 genai.configure(api_key=api_key)
 
-# Session state
 for key, default in [
     ("transcript_raw", ""),
     ("plot_summary", ""),
     ("transcript_tagged", ""),
     ("chapter", ""),
     ("processed", False),
+    ("has_video_url", False),
+    ("has_video_upload", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -68,7 +68,7 @@ def get_safety_settings():
 
 
 def clean_temp_files():
-    for f in ["temp_audio_source", "temp_audio.mp3", "cookies.txt"]:
+    for f in ["temp_audio_source", "temp_audio.mp3", "temp_video_url.mp4", "temp_video_upload.mp4", "cookies.txt"]:
         if os.path.exists(f):
             try:
                 os.remove(f)
@@ -77,7 +77,6 @@ def clean_temp_files():
 
 
 def extract_audio(input_path: str, audio_path: str = "temp_audio.mp3") -> str:
-    """Takes any media file (audio or video) and converts it to MP3."""
     if os.path.exists(audio_path):
         os.remove(audio_path)
     cmd = ["ffmpeg", "-y", "-i", input_path, "-vn", "-acodec", "mp3", audio_path]
@@ -86,7 +85,6 @@ def extract_audio(input_path: str, audio_path: str = "temp_audio.mp3") -> str:
 
 
 def whisper_transcribe(audio_path: str) -> str:
-    # High accuracy: use Whisper large
     model = whisper.load_model("large")
     result = model.transcribe(audio_path)
     return result.get("text", "").strip()
@@ -104,9 +102,9 @@ def get_gemini_model():
     return genai.GenerativeModel(name)
 
 
-def upload_audio_to_gemini(audio_path: str):
+def upload_file_to_gemini(path: str):
     try:
-        file_obj = genai.upload_file(path=audio_path)
+        file_obj = genai.upload_file(path=path)
         while getattr(file_obj, "state", None) and file_obj.state.name == "PROCESSING":
             time.sleep(2)
             file_obj = genai.get_file(file_obj.name)
@@ -117,23 +115,44 @@ def upload_audio_to_gemini(audio_path: str):
         return None
 
 
-def download_audio_only(url: str, cookie_file) -> str:
-    """Uses yt-dlp to download audio-only stream from a URL."""
-    out_path = "temp_audio_source"
-    if os.path.exists(out_path):
-        os.remove(out_path)
+def download_media_from_url(url: str, cookie_file):
+    audio_out = "temp_audio_source"
+    video_out = "temp_video_url.mp4"
 
-    cmd = ["yt-dlp", "-f", "bestaudio", "-o", out_path]
+    for f in [audio_out, video_out]:
+        if os.path.exists(f):
+            os.remove(f)
+
+    # audio
+    cmd_audio = ["yt-dlp", "-f", "bestaudio", "-o", audio_out]
     if cookie_file:
         with open("cookies.txt", "wb") as f:
             f.write(cookie_file.getbuffer())
-        cmd.extend(["--cookies", "cookies.txt"])
-    cmd.append(url)
-    subprocess.run(cmd, check=True)
-    return out_path
+        cmd_audio.extend(["--cookies", "cookies.txt"])
+    cmd_audio.append(url)
+    subprocess.run(cmd_audio, check=True)
+
+    # video (for user download only)
+    cmd_video = [
+        "yt-dlp",
+        "-f",
+        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
+        "-o",
+        video_out,
+    ]
+    if cookie_file:
+        cmd_video.extend(["--cookies", "cookies.txt"])
+    cmd_video.append(url)
+    try:
+        subprocess.run(cmd_video, check=True)
+        st.session_state.has_video_url = True
+    except subprocess.CalledProcessError:
+        st.session_state.has_video_url = False
+
+    return audio_out
 
 
-# ---------------- SIDEBAR (CHARACTERS + POV) ----------------
+# ---------------- SIDEBAR ----------------
 
 with st.sidebar:
     st.header("🎭 Character list")
@@ -168,137 +187,122 @@ with st.sidebar:
 
     st.divider()
     if st.button("🗑️ Reset project"):
-        for key in ["transcript_raw", "plot_summary", "transcript_tagged", "chapter", "processed"]:
-            st.session_state[key] = "" if key != "processed" else False
+        for key in [
+            "transcript_raw",
+            "plot_summary",
+            "transcript_tagged",
+            "chapter",
+            "processed",
+            "has_video_url",
+            "has_video_upload",
+        ]:
+            st.session_state[key] = "" if key not in ["processed", "has_video_url", "has_video_upload"] else False
         clean_temp_files()
         st.rerun()
 
 
 # ---------------- MAIN UI ----------------
 
-st.title("🎬 Cinematic POV Story Engine – Audio Only")
+st.title("🎬 Cinematic POV Story Engine")
 
 st.markdown(
     """
-This app turns real audio from shows or movies into a **YA-style POV novel chapter** using your own cast list.
+This app turns real scenes into a **YA-style POV novel chapter** using:
 
-### 🔧 What it does
-
-1. You give it **audio** from a show or movie:
-   - **Tab 1 – URL:** paste a streaming URL (DisneyNow, Disney+, YouTube, etc.) – it downloads **audio only**  
-   - **Tab 2 – File upload:** upload a PlayOn recording, screen recording, or any audio/video file  
-
-2. It converts everything to MP3 and uses **Whisper (large)** to transcribe the audio as accurately as possible.
-
-3. **Gemini** then:
-   - Listens to the audio  
-   - Reads the transcript  
-   - Creates a detailed **plot summary**  
-   - Uses your **cast list** to tag **who said what**  
-   - Writes a **YA-style novel chapter** from your chosen POV.
-
-4. You can download:
-   - The **speaker-tagged transcript** (Word)  
-   - The **novel chapter** (Word)
+- **Whisper large** for high-accuracy transcription  
+- **Gemini** to listen, read, and (for your own uploads) watch video  
 """
 )
 
-with st.expander("📖 How to use this app (step by step)"):
+with st.expander("📖 How to use this app"):
     st.markdown(
         """
-### 1️⃣ Set up your characters and POV (left sidebar)
-- Edit the **Character list** so it matches your show (e.g. `Giada: Mother`, `Roman: Protagonist`).
-- Choose a **POV narrator** (or type a custom name).
-- Pick which characters to **focus on** in the chapter.
+### 1️⃣ Set up characters and POV (left sidebar)
+- Edit the **Character list** to match your show.
+- Choose a **POV narrator** or type a custom name.
+- Pick **focus characters** for the chapter.
 
-### 2️⃣ Choose how to give the app your audio
+### 2️⃣ Choose input mode
 
-**Option A – URL (Tab: “URL – audio only”)**
-- Paste a streaming URL (DisneyNow, Disney+, YouTube, etc.).
-- For **DisneyNow**, you **must** upload a `cookies.txt` file in the sidebar (see instructions below).
+**A. URL (streaming link)**  
+- Use the **URL** tab for DisneyNow, Disney+, YouTube, etc.  
+- The app will:
+  - Download **audio** (for Whisper + Gemini)  
+  - Download **video MP4** only so you can save it  
+- For **DisneyNow**, you must upload `cookies.txt` (see instructions below).
 
-**Option B – File upload (Tab: “File upload / live recording”)**
-- Upload a file from:
-  - PlayOn recordings  
-  - Screen recordings (phone or computer)  
-  - Voice memos / audio recordings  
-  - Any MP4, MOV, MKV, MP3, WAV, M4A, AAC  
+**B. Upload (your own files)**  
+- Use the **Upload** tab to upload:
+  - MP4 / MOV / MKV (screen recordings, PlayOn, YouTube downloads)  
+  - MP3 / WAV / M4A / AAC (audio only)  
+- If you upload **MP4**, Gemini will get:
+  - the video  
+  - the audio  
+  - the Whisper transcript  
 
-### 3️⃣ (Optional) Add writer notes
-- In the **Writer notes** tab, you can describe:
-  - Tone (soft, intense, funny, dark, etc.)
-  - Themes (family, grief, romance, etc.)
-  - What to emphasise in the chapter.
+### 3️⃣ Optional writer notes
+Use the **Writer notes** tab to describe tone, themes, and what to emphasise.
 
 ### 4️⃣ Run the pipeline
-- Click **“🚀 Run full audio pipeline”**.
-- The app will:
-  1. Download or read the audio  
-  2. Convert to MP3  
-  3. Transcribe with Whisper (large)  
-  4. Generate a plot summary  
-  5. Tag who said what  
-  6. Write a YA-style POV chapter  
+Click **“🚀 Run full pipeline”**.
 
-### 5️⃣ Read and download results
-- Scroll down to see:
-  - **Plot summary**
-  - **Speaker-tagged transcript**
-  - **POV novel chapter**
-- Use the **Download** buttons to save Word files.
+The app will:
+1. Get audio (and video if available)  
+2. Transcribe with Whisper large  
+3. Generate a plot summary  
+4. Tag who said what  
+5. Write a YA-style POV chapter  
 
-### 🔁 If something fails
-- If you see a **yt-dlp** or **ffmpeg** error:
-  - For DisneyNow/Disney+, check `cookies.txt` or use **File upload** instead.
-- If the transcript is very short, try a different file or shorter clip.
+### 5️⃣ Results
+You’ll get:
+- Plot summary  
+- Speaker-tagged transcript  
+- POV chapter  
+- Download buttons for:
+  - Transcript (Word)  
+  - Chapter (Word)  
+  - Video (MP4) if available  
 """
     )
 
-with st.expander("ℹ️ How to get cookies.txt for DisneyNow (required for URL mode)"):
+with st.expander("ℹ️ How to get cookies.txt for DisneyNow (URL mode)"):
     st.markdown(
         """
-DisneyNow uses short‑lived security tokens. To download audio from DisneyNow URLs, you **must** provide a `cookies.txt` file from your own device.  
-This file contains your **login session**, **region**, and **access tokens** so yt‑dlp can request a fresh playlist every time.
+DisneyNow uses short‑lived security tokens. To download audio from DisneyNow URLs, you **must** provide a `cookies.txt` file from your own device.
 
-### 📱 iPhone (Safari)
-1. Install the extension **“Get cookies.txt”** from the App Store.
-2. Open **Settings → Safari → Extensions** and enable it.
-3. Open Safari and go to **disneynow.com**.
-4. Log in and open the episode you want.
-5. Tap the **AA** icon → **Get cookies.txt** → **Export** → **Save to Files**.
-6. Upload the saved `cookies.txt` file in the sidebar.
-
-### 🤖 Android (Chrome or Kiwi Browser)
-1. Install the extension **“Get cookies.txt”** from the Chrome Web Store.
-2. Open **disneynow.com** and log in.
-3. Open the browser menu → **Extensions** → **Get cookies.txt**.
-4. Tap **Export** and save the file.
+### iPhone (Safari)
+1. Install **“Get cookies.txt”** from the App Store.
+2. Enable it in **Settings → Safari → Extensions**.
+3. Go to **disneynow.com**, log in, open the episode.
+4. Tap **AA → Get cookies.txt → Export → Save to Files**.
 5. Upload `cookies.txt` in the sidebar.
 
-### 🖥️ Windows / Mac (Chrome, Edge, Firefox)
-1. Install the extension **“Get cookies.txt”**.
-2. Go to **disneynow.com** and log in.
-3. Click the extension → **Export cookies for this site**.
-4. Save the file as `cookies.txt`.
-5. Upload it in the sidebar.
+### Android (Chrome / Kiwi)
+1. Install **“Get cookies.txt”** from the Chrome Web Store.
+2. Go to **disneynow.com**, log in.
+3. Open **Extensions → Get cookies.txt → Export**.
+4. Save and upload `cookies.txt` in the sidebar.
 
-### ❗ Important notes
-- The cookies file must come from **your own logged‑in device**.
-- Cookies expire — if downloads stop working, export a **fresh** `cookies.txt`.
-- If DisneyNow still fails, use the **File upload** tab instead (PlayOn recordings or screen recordings always work).
+### Desktop (Chrome / Edge / Firefox)
+1. Install **“Get cookies.txt”** extension.
+2. Go to **disneynow.com**, log in.
+3. Click the extension → **Export cookies for this site**.
+4. Save as `cookies.txt` and upload it.
+
+If DisneyNow still fails, use the **Upload** tab with a PlayOn or screen recording file.
 """
     )
 
-tab_url, tab_file, tab_notes = st.tabs(
-    ["🌐 URL (audio only)", "📁 File upload / live recording", "📝 Writer notes"]
+tab_url, tab_upload, tab_notes = st.tabs(
+    ["🌐 URL (streaming)", "📁 Upload (MP4 or audio)", "📝 Writer notes"]
 )
 
 with tab_url:
-    url_link = st.text_input("Paste video/audio URL (DisneyNow, Disney+, YouTube, etc.):")
+    url_link = st.text_input("Paste streaming URL (DisneyNow, Disney+, YouTube, etc.):")
 
-with tab_file:
-    file_media = st.file_uploader(
-        "Upload audio or video (PlayOn MP4, screen recording, MP3, WAV, etc.)",
+with tab_upload:
+    upload_file = st.file_uploader(
+        "Upload MP4 video or audio file",
         type=["mp4", "mov", "mkv", "mp3", "wav", "m4a", "aac"],
     )
 
@@ -310,70 +314,93 @@ with tab_notes:
     )
 
 
-# ---------------- PIPELINE BUTTON ----------------
+# ---------------- PIPELINE ----------------
 
-if st.button("🚀 Run full audio pipeline", use_container_width=True):
-    if not file_media and not url_link:
-        st.error("Please upload a file or provide a URL.")
+if st.button("🚀 Run full pipeline", use_container_width=True):
+    if not url_link and not upload_file:
+        st.error("Please provide a URL or upload a file.")
     else:
-        with st.status("Running audio → Whisper → Gemini pipeline...", expanded=True) as status:
+        with st.status("Running pipeline...", expanded=True) as status:
             try:
                 clean_temp_files()
+                st.session_state.has_video_url = False
+                st.session_state.has_video_upload = False
 
-                # 1. Get audio source (URL or file)
-                status.update(label="⬇️ Getting audio source...", state="running")
+                # 1. Get audio (and video) depending on mode
+                status.update(label="⬇️ Getting media...", state="running")
+
+                audio_source_path = None
+                upload_video_path = None
 
                 if url_link:
-                    # DisneyNow requires cookies.txt
+                    # URL MODE
                     if "disneynow.com" in url_link.lower() and not cookie_file:
-                        st.error("DisneyNow URLs require cookies.txt. Please upload your cookies file in the sidebar.")
+                        st.error("DisneyNow URLs require cookies.txt. Upload it in the sidebar.")
                         clean_temp_files()
                         st.stop()
                     try:
-                        source_audio = download_audio_only(url_link, cookie_file)
+                        audio_source_path = download_media_from_url(url_link, cookie_file)
                     except subprocess.CalledProcessError as e:
                         st.error(
-                            f"yt-dlp audio download failed.\n\n"
-                            f"Details: {e}\n\n"
-                            "If this is a DisneyNow/Disney+ link, make sure cookies.txt is valid, "
-                            "or instead upload a PlayOn/screen recording file in the File upload tab."
+                            f"yt-dlp failed.\n\n{e}\n\n"
+                            "For DisneyNow/Disney+, check cookies.txt or use the Upload tab with a recording."
                         )
                         clean_temp_files()
                         st.stop()
                 else:
-                    # Save uploaded file as temp_audio_source
-                    source_audio = "temp_audio_source"
-                    with open(source_audio, "wb") as f:
-                        f.write(file_media.getbuffer())
+                    # UPLOAD MODE
+                    if upload_file is None:
+                        st.error("No file uploaded.")
+                        clean_temp_files()
+                        st.stop()
 
-                # 2. Convert to MP3 (ffmpeg)
-                status.update(label="🎧 Converting to MP3 with ffmpeg...", state="running")
-                audio_path = extract_audio(source_audio, "temp_audio.mp3")
+                    ext = os.path.splitext(upload_file.name)[1].lower()
+                    if ext in [".mp4", ".mov", ".mkv"]:
+                        upload_video_path = "temp_video_upload.mp4"
+                        with open(upload_video_path, "wb") as f:
+                            f.write(upload_file.getbuffer())
+                        st.session_state.has_video_upload = True
+                        audio_source_path = upload_video_path
+                    else:
+                        audio_source_path = "temp_audio_source"
+                        with open(audio_source_path, "wb") as f:
+                            f.write(upload_file.getbuffer())
+
+                # 2. Extract audio to MP3
+                status.update(label="🎧 Extracting audio...", state="running")
+                audio_path = extract_audio(audio_source_path, "temp_audio.mp3")
 
                 # 3. Whisper transcription
-                status.update(label="📝 Transcribing audio with Whisper (large)...", state="running")
+                status.update(label="📝 Transcribing with Whisper large...", state="running")
                 transcript_raw = whisper_transcribe(audio_path)
                 if not transcript_raw or len(transcript_raw) < 50:
-                    st.error("Transcript is empty or too short. Check the audio or try another file/URL.")
+                    st.error("Transcript is empty or too short. Try a different clip.")
                     clean_temp_files()
                     st.stop()
                 st.session_state.transcript_raw = transcript_raw
 
-                # 4. Gemini model
+                # 4. Gemini model + safety
                 model = get_gemini_model()
                 safety = get_safety_settings()
 
-                # 5. Upload audio to Gemini (so it can LISTEN)
-                status.update(label="📤 Uploading audio to Gemini...", state="running")
-                audio_file_obj = upload_audio_to_gemini(audio_path)
+                # 5. Upload audio (always) and video (only for upload mode) to Gemini
+                status.update(label="📤 Uploading media to Gemini...", state="running")
+                audio_file_obj = upload_file_to_gemini(audio_path)
 
-                # 6. Plot summary (Gemini listens + reads)
+                video_file_obj = None
+                if not url_link and st.session_state.has_video_upload:
+                    video_file_obj = upload_file_to_gemini("temp_video_upload.mp4")
+
+                # 6. Plot summary
                 status.update(label="📚 Generating plot summary...", state="running")
 
+                plot_inputs = []
+                if video_file_obj is not None:
+                    plot_inputs.append(video_file_obj)
                 if audio_file_obj is not None:
-                    plot_prompt_input = [
-                        audio_file_obj,
-                        f"""
+                    plot_inputs.append(audio_file_obj)
+
+                plot_prompt = f"""
 You are a story analyst.
 
 CAST (name: role):
@@ -383,37 +410,29 @@ RAW TRANSCRIPT:
 \"\"\"{transcript_raw}\"\"\"
 
 TASK:
-1. Listen carefully to the audio and read the transcript.
-2. Produce a clear plot summary of what happens in this audio.
+1. Use the media (video/audio if provided) and the transcript.
+2. Produce a clear plot summary of what happens in this scene.
 3. Mention key characters, relationships, conflicts, and emotional beats.
 4. Keep it 3–8 paragraphs, no bullet points, no meta commentary.
-""",
-                    ]
-                else:
-                    plot_prompt_input = f"""
-You are a story analyst.
-
-CAST (name: role):
-{cast_info}
-
-RAW TRANSCRIPT (audio could not be provided, so rely on text only):
-\"\"\"{transcript_raw}\"\"\"
-
-TASK:
-1. Produce a clear plot summary of what happens in this audio.
-2. Mention key characters, relationships, conflicts, and emotional beats.
-3. Keep it 3–8 paragraphs, no bullet points, no meta commentary.
 """
 
-                plot_resp = model.generate_content(
-                    contents=plot_prompt_input,
-                    safety_settings=safety,
-                )
+                if plot_inputs:
+                    plot_inputs.append(plot_prompt)
+                    plot_resp = model.generate_content(
+                        contents=plot_inputs,
+                        safety_settings=safety,
+                    )
+                else:
+                    plot_resp = model.generate_content(
+                        contents=plot_prompt,
+                        safety_settings=safety,
+                    )
+
                 plot_summary = (plot_resp.text or "").strip() if plot_resp else ""
                 st.session_state.plot_summary = plot_summary
 
-                # 7. Speaker tagging using plot + cast + transcript
-                status.update(label="🎙️ Tagging who said what (speaker names)...", state="running")
+                # 7. Speaker tagging
+                status.update(label="🎙️ Tagging speakers...", state="running")
 
                 speaker_prompt = f"""
 You are a careful dialogue editor.
@@ -445,8 +464,8 @@ TASK:
                     transcript_tagged = transcript_raw
                 st.session_state.transcript_tagged = transcript_tagged
 
-                # 8. YA POV novel chapter
-                status.update(label="📖 Writing YA-style POV novel chapter...", state="running")
+                # 8. YA POV chapter
+                status.update(label="📖 Writing YA-style POV chapter...", state="running")
 
                 focus_str = ", ".join(focus_characters) if focus_characters else "all characters"
 
@@ -491,14 +510,14 @@ REQUIREMENTS:
                 )
                 chapter_text = (novel_resp.text or "").strip() if novel_resp else ""
                 if not chapter_text or len(chapter_text) < 100:
-                    st.error("Gemini returned an empty or very short chapter. Try a different audio or shorter content.")
+                    st.error("Gemini returned an empty or very short chapter. Try a different clip.")
                     clean_temp_files()
                     st.stop()
 
                 st.session_state.chapter = chapter_text
                 st.session_state.processed = True
 
-                status.update(label="✅ Done! Transcript, plot, speakers, and chapter ready.", state="complete")
+                status.update(label="✅ Done! Results ready below.", state="complete")
                 clean_temp_files()
                 st.rerun()
 
@@ -530,7 +549,7 @@ if st.session_state.processed:
         )
 
     with col2:
-        st.subheader(f"📖 Novel chapter – {pov_choice} POV (YA-style)")
+        st.subheader(f"📖 Novel chapter – {pov_choice} POV")
         st.text_area("Chapter", st.session_state.chapter, height=500)
 
         st.download_button(
@@ -538,3 +557,21 @@ if st.session_state.processed:
             create_docx(f"{pov_choice} Chapter", st.session_state.chapter),
             "NovelChapter.docx",
         )
+
+        st.markdown("### 🎞️ Video downloads (if available)")
+        if st.session_state.has_video_url and os.path.exists("temp_video_url.mp4"):
+            with open("temp_video_url.mp4", "rb") as f:
+                st.download_button(
+                    "Download URL video (MP4)",
+                    f,
+                    file_name="scene_url.mp4",
+                    mime="video/mp4",
+                )
+        if st.session_state.has_video_upload and os.path.exists("temp_video_upload.mp4"):
+            with open("temp_video_upload.mp4", "rb") as f:
+                st.download_button(
+                    "Download uploaded video (MP4)",
+                    f,
+                    file_name="scene_upload.mp4",
+                    mime="video/mp4",
+                )
