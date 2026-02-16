@@ -53,15 +53,15 @@ def get_safety_settings():
             "threshold": HarmBlockThreshold.BLOCK_NONE,
         },
         {
-            "category": HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+            "category": HarmCategory.HATE_SPEECH,
             "threshold": HarmBlockThreshold.BLOCK_NONE,
         },
         {
-            "category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+            "category": HarmCategory.SEXUALLY_EXPLICIT,
             "threshold": HarmBlockThreshold.BLOCK_NONE,
         },
         {
-            "category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+            "category": HarmCategory.DANGEROUS_CONTENT,
             "threshold": HarmBlockThreshold.BLOCK_NONE,
         },
     ]
@@ -77,9 +77,7 @@ def clean_temp_files():
 
 
 def extract_audio(input_path: str, audio_path: str = "temp_audio.mp3") -> str:
-    """
-    Takes any media file (audio or video) and converts it to MP3.
-    """
+    """Takes any media file (audio or video) and converts it to MP3."""
     if os.path.exists(audio_path):
         os.remove(audio_path)
     cmd = ["ffmpeg", "-y", "-i", input_path, "-vn", "-acodec", "mp3", audio_path]
@@ -88,7 +86,6 @@ def extract_audio(input_path: str, audio_path: str = "temp_audio.mp3") -> str:
 
 
 def whisper_transcribe(audio_path: str) -> str:
-    # You can change "base" to "small" / "medium" / "large" if your server is stronger
     model = whisper.load_model("base")
     result = model.transcribe(audio_path)
     return result.get("text", "").strip()
@@ -109,7 +106,6 @@ def get_gemini_model():
 def upload_audio_to_gemini(audio_path: str):
     try:
         file_obj = genai.upload_file(path=audio_path)
-        # Wait until processed
         while getattr(file_obj, "state", None) and file_obj.state.name == "PROCESSING":
             time.sleep(2)
             file_obj = genai.get_file(file_obj.name)
@@ -121,10 +117,7 @@ def upload_audio_to_gemini(audio_path: str):
 
 
 def download_audio_only(url: str, cookie_file) -> str:
-    """
-    Uses yt-dlp to download audio-only stream from a URL.
-    Output is saved as 'temp_audio_source'.
-    """
+    """Uses yt-dlp to download audio-only stream from a URL."""
     out_path = "temp_audio_source"
     if os.path.exists(out_path):
         os.remove(out_path)
@@ -139,10 +132,10 @@ def download_audio_only(url: str, cookie_file) -> str:
     return out_path
 
 
-# ---------------- SIDEBAR ----------------
+# ---------------- SIDEBAR (CHARACTERS + POV) ----------------
 
 with st.sidebar:
-    st.header("🎭 Character Bible")
+    st.header("🎭 Character list")
     cast_info = st.text_area(
         "Cast list (name: role):",
         "Giada: Mother\nJustin: Father\nRoman: Protagonist\nTheresa: Grandmother",
@@ -157,7 +150,7 @@ with st.sidebar:
             if name:
                 cast_names.append(name)
 
-    st.header("👤 POV & Focus")
+    st.header("👤 POV & focus")
     pov_options = ["Custom"] + cast_names
     pov_choice = st.selectbox("Primary POV narrator:", pov_options)
     if pov_choice == "Custom":
@@ -169,8 +162,8 @@ with st.sidebar:
         default=cast_names,
     )
 
-    st.header("🌐 URL audio options")
-    cookie_file = st.file_uploader("cookies.txt (optional, for Disney/region)", type=["txt"])
+    st.header("🌐 URL cookies")
+    cookie_file = st.file_uploader("cookies.txt (required for DisneyNow)", type=["txt"])
 
     st.divider()
     if st.button("🗑️ Reset project"):
@@ -189,17 +182,16 @@ st.markdown(
 **What this app does**
 
 1. You give it **audio** from a show or movie:
-   - Paste a streaming URL (DisneyNow, Disney+, YouTube, etc.) – it downloads **audio only**, or  
-   - Upload a file (PlayOn recording, screen recording, or any audio/video file), or  
-   - Upload a **live recording** from your phone’s recorder app.
+   - **Tab 1 – URL:** paste a streaming URL (DisneyNow, Disney+, YouTube, etc.) – it downloads **audio only**  
+   - **Tab 2 – File upload:** upload a PlayOn recording, screen recording, or any audio/video file  
 
-2. It converts everything to MP3 and uses **Whisper** to transcribe the audio as accurately as possible.
+2. It converts everything to MP3 and uses **Whisper** to transcribe the audio.
 
 3. **Gemini** then:
    - Listens to the audio  
    - Reads the transcript  
    - Creates a detailed **plot summary**  
-   - Uses your **cast list** to tag **who said what** line by line  
+   - Uses your **cast list** to tag **who said what**  
    - Writes a **YA-style novel chapter** from your chosen POV.
 
 4. You can download:
@@ -208,10 +200,12 @@ st.markdown(
 """
 )
 
-tab_url, tab_file, tab_notes = st.tabs(["🌐 URL (audio only)", "📁 File upload / live recording", "📝 Writer notes"])
+tab_url, tab_file, tab_notes = st.tabs(
+    ["🌐 URL (audio only)", "📁 File upload / live recording", "📝 Writer notes"]
+)
 
 with tab_url:
-    url_link = st.text_input("Paste video/audio URL (Disney+, DisneyNow, YouTube, etc.):")
+    url_link = st.text_input("Paste video/audio URL (DisneyNow, Disney+, YouTube, etc.):")
 
 with tab_file:
     file_media = st.file_uploader(
@@ -241,11 +235,20 @@ if st.button("🚀 Run full audio pipeline", use_container_width=True):
                 status.update(label="⬇️ Getting audio source...", state="running")
 
                 if url_link:
-                    # Audio-only download via yt-dlp
+                    # DisneyNow requires cookies.txt
+                    if "disneynow.com" in url_link.lower() and not cookie_file:
+                        st.error("DisneyNow URLs require cookies.txt. Please upload your cookies file in the sidebar.")
+                        clean_temp_files()
+                        st.stop()
                     try:
                         source_audio = download_audio_only(url_link, cookie_file)
                     except subprocess.CalledProcessError as e:
-                        st.error(f"yt-dlp audio download failed: {e}")
+                        st.error(
+                            f"yt-dlp audio download failed.\n\n"
+                            f"Details: {e}\n\n"
+                            "If this is a DisneyNow/Disney+ link, make sure cookies.txt is valid, "
+                            "or instead upload a PlayOn/screen recording file in the File Upload tab."
+                        )
                         clean_temp_files()
                         st.stop()
                 else:
