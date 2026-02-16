@@ -1,5 +1,7 @@
-streamlit
-google-generativeai
+whisper
+torch
+torchaudio
+ffmpeg-python
+yt-dlp
 python-docx
-openai-whisper
-setuptools
+google-generativeai
