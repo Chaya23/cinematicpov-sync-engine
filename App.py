@@ -1,52 +1,63 @@
 import streamlit as st
 import google.generativeai as genai
+import time
 import os
 
-# 1. SETUP - Use the Key you fixed in Secrets
+# 1. SETUP
 API_KEY = st.secrets.get("GEMINI_API_KEY")
 if API_KEY:
     genai.configure(api_key=API_KEY)
 
-# 2. SESSION ANCHOR - Keeps data alive if site reloads
-if "transcript" not in st.session_state:
-    st.session_state.transcript = ""
-if "novel_chapter" not in st.session_state:
-    st.session_state.novel_chapter = ""
+# Persistence for results
+if "final_output" not in st.session_state:
+    st.session_state.final_output = ""
 
-st.title("🧙‍♂️ Roman's Redemption")
+st.title("🧙‍♂️ Roman's Redemption: POV Studio")
 
-# 3. UPLOAD SECTION
-up_file = st.file_uploader("Upload 4K Record", type=["mp4", "mov"])
+# 2. MANUAL POV SELECTOR
+pov_choice = st.selectbox(
+    "Select Character POV for the Novel:",
+    ["Roman Russo", "Justin Russo", "Alex Russo", "Max Russo", "Billie"]
+)
+
+up_file = st.file_uploader("Upload Episode (MP4/MOV)", type=["mp4", "mov"])
 
 if up_file:
-    if st.button("🚀 Start Production"):
-        with st.status("🎬 Processing Wizards Footage...") as status:
-            # Save the file to server
-            with open("temp_video.mp4", "wb") as f:
-                f.write(up_file.getbuffer())
+    # Save locally to handle the 10GB limit processing
+    with open("episode.mp4", "wb") as f:
+        f.write(up_file.getbuffer())
+
+    if st.button(f"🎬 Generate {pov_choice} POV"):
+        with st.status("📡 Processing... This can take 2-5 minutes.") as status:
             
-            # CALL GEMINI AI
+            # Step A: Upload to Gemini
+            video_file = genai.upload_file(path="episode.mp4")
+            
+            # Step B: Background monitoring so app doesn't crash
+            while video_file.state.name == "PROCESSING":
+                time.sleep(5)
+                video_file = genai.get_file(video_file.name)
+            
+            # Step C: The Comprehensive Prompt
             model = genai.GenerativeModel('gemini-1.5-flash')
+            prompt = f"""
+            Identify all speakers in this 'Wizards Beyond Waverly Place' video.
             
-            # The prompt for transcription and novelizing
-            prompt = """
-            1. Transcribe the dialogue from this Wizards Beyond Waverly Place clip.
-            2. Write a 2,000-word novel chapter from the 1st-person POV of Roman Russo.
+            TASK 1: FULL TRANSCRIPT
+            Provide a word-for-word transcript. 
+            Format: [Character Name]: [Dialogue]
+            
+            TASK 2: RESEARCH & NOVEL
+            Using the events in this video, write a 2,000-word novel chapter.
+            The chapter MUST be in the 1st-person POV of {pov_choice}.
+            Include internal thoughts and specific details from the episode.
             """
             
-            # Note: For real video, you'd use genai.upload_file() here
-            response = model.generate_content(prompt)
-            
-            # Save results to Session State so they don't vanish
-            st.session_state.transcript = "TRANSCRIPT: [Dialogue from Wizards Ep 5...]"
-            st.session_state.novel_chapter = response.text
-            status.update(label="✅ Production Finished!", state="complete")
+            response = model.generate_content([video_file, prompt])
+            st.session_state.final_output = response.text
+            status.update(label="✅ Production Complete!", state="complete")
 
-# 4. RESULTS AREA - Always stays visible
-if st.session_state.novel_chapter:
+# 3. THE RESULT
+if st.session_state.final_output:
     st.divider()
-    with st.expander("📜 View Transcript"):
-        st.write(st.session_state.transcript)
-    
-    st.subheader("📖 Roman Russo's Chapter")
-    st.write(st.session_state.novel_chapter)
+    st.markdown(st.session_state.final_output)
