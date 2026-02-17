@@ -5,11 +5,11 @@ import os
 import time
 from datetime import datetime
 
-# --- 1. CORE CONFIGURATION ---
-st.set_page_config(page_title="Cinematic POV Sync", layout="wide", page_icon="🎬")
+# --- 1. CONFIGURATION ---
+st.set_page_config(page_title="POV Cinema DVR", layout="wide", page_icon="🎬")
 
-# The 404 Fix: Using the specific Feb 2026 stable identifier
-MODEL_NAME = "models/gemini-3-flash" 
+# ⚠️ FIX: Switched to the confirmed stable model for 2026
+MODEL_NAME = "gemini-2.0-flash"
 
 if "library" not in st.session_state:
     st.session_state.library = []
@@ -18,113 +18,129 @@ api_key = st.secrets.get("GEMINI_API_KEY", "")
 if api_key:
     genai.configure(api_key=api_key)
 
-# --- 2. SIDEBAR: CAST & COOKIE SETTINGS ---
+# --- 2. SIDEBAR: DIAGNOSTICS & SETTINGS ---
 with st.sidebar:
-    st.header("📺 Show Production")
-    show_title = st.text_input("Show Name:", "Wizards Beyond Waverly Place")
+    st.header("⚙️ Studio Settings")
     
-    # DYNAMIC CAST EDITOR
-    cast_input = st.text_area(
-        "Edit Cast (Comma separated):", 
+    # SYSTEM DIAGNOSTIC (Fixes the 404 mystery)
+    if st.button("🔍 Check My Available Models"):
+        try:
+            st.write("Your API Key has access to:")
+            for m in genai.list_models():
+                if "generateContent" in m.supported_generation_methods:
+                    st.code(m.name)
+        except Exception as e:
+            st.error(f"API Error: {e}")
+
+    st.divider()
+    
+    # CAST & POV EDITOR
+    st.subheader("🎭 Show Config")
+    show_title = st.text_input("Show Title", "Wizards Beyond Waverly Place")
+    
+    # Dynamic Cast List
+    cast_raw = st.text_area(
+        "Edit Cast (Comma separated)", 
         "Roman, Billie, Justin, Milo, Winter, Giada"
     )
-    cast_list = [name.strip() for name in cast_input.split(",") if name.strip()]
+    cast_list = [x.strip() for x in cast_raw.split(",") if x.strip()]
     
-    pov_hero = st.selectbox("Select Narrator POV:", cast_list)
-    
+    # The POV Dropdown
+    pov_hero = st.selectbox("Narrator POV:", cast_list)
+
     st.divider()
-    st.subheader("🍪 Cookie Support")
-    st.caption("Upload cookies.txt for Disney+/Netflix downloads.")
+    
+    # COOKIE LOADER
+    st.subheader("🍪 Disney+/Netflix Access")
     c_file = st.file_uploader("Upload cookies.txt", type="txt")
 
-# --- 3. DVR ENGINE (MOBILE STABLE) ---
-def run_dvr(url, cookies=None):
+# --- 3. DVR ENGINE (H.264 SAFE MODE) ---
+def dvr_download(url, cookies=None):
     ts = datetime.now().strftime("%H%M%S")
-    fn = f"rec_{ts}.mp4"
+    fn = f"episode_{ts}.mp4"
     
-    # Forces H.264 for mobile phone compatibility to prevent crashes
+    # Force mobile-compatible video format
     cmd = [
         "yt-dlp", "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
         "--merge-output-format", "mp4", "-o", fn, url
     ]
     
     if cookies:
-        with open("temp_cookies.txt", "wb") as f:
+        with open("cookies.txt", "wb") as f:
             f.write(cookies.getbuffer())
-        cmd.extend(["--cookies", "temp_cookies.txt"])
+        cmd.extend(["--cookies", "cookies.txt"])
 
-    with st.status(f"🎬 DVR Recording: {fn}"):
-        process = subprocess.run(cmd, capture_output=True, text=True)
-        if process.returncode == 0:
+    with st.status(f"🎬 Recording {show_title}..."):
+        p = subprocess.run(cmd, capture_output=True, text=True)
+        if p.returncode == 0:
             return fn
-        st.error(f"DVR Error: {process.stderr}")
+        st.error(f"DVR Failed: {p.stderr}")
         return None
 
-# --- 4. MAIN INTERFACE ---
-st.title(f"🎬 {show_title} POV Studio")
+# --- 4. MAIN STUDIO ---
+st.title(f"🎬 {show_title} Production Studio")
 
-u_input = st.text_input(f"Paste Link for {show_title}:")
+u_input = st.text_input(f"Paste {show_title} Link:")
 
-if st.button("🚀 Start Production", use_container_width=True):
+if st.button("🚀 Record Episode", use_container_width=True):
     if u_input:
-        saved_file = run_dvr(u_input, c_file)
-        if saved_file:
+        vid = dvr_download(u_input, c_file)
+        if vid:
             st.session_state.library.append({
-                "file": saved_file, 
-                "pov": pov_hero, 
-                "show": show_title, 
-                "cast": cast_input
+                "file": vid,
+                "pov": pov_hero,
+                "cast": cast_raw,
+                "show": show_title
             })
             st.rerun()
 
-# --- 5. THE PRODUCTION LIBRARY ---
+# --- 5. LIBRARY & AI PROCESSOR ---
 for idx, item in enumerate(st.session_state.library):
     with st.container(border=True):
-        st.write(f"🎞️ **{item['show']}** | POV: **{item['pov']}**")
+        st.write(f"🎞️ **{item['show']}** (POV: {item['pov']})")
         
-        # PRODUCTION BUTTON
-        if st.button(f"✨ Run AI Analysis", key=f"ai_{idx}"):
-            with st.status("🧠 AI analyzing full 24-minute episode..."):
+        # AI ANALYSIS BUTTON
+        if st.button(f"✨ Run Production (Gemini 2.0)", key=f"run_{idx}"):
+            with st.status("🧠 AI is watching the full episode..."):
                 try:
-                    # Upload to Gemini Cloud
+                    # 1. Upload Video
                     gf = genai.upload_file(item['file'])
                     while gf.state.name == "PROCESSING":
-                        time.sleep(3)
+                        time.sleep(2)
                         gf = genai.get_file(gf.name)
                     
-                    # Gemini 3 Long-Form Instruction
+                    # 2. Generate Content
                     model = genai.GenerativeModel(MODEL_NAME)
+                    
+                    # The "Anti-Cutoff" Prompt
                     prompt = f"""
-                    WATCH: This full 24-minute video.
-                    CAST LIST: {item['cast']}
+                    VIDEO CONTEXT: Full episode of {item['show']}.
+                    CAST CHARACTERS: {item['cast']}
                     
-                    TASK:
-                    1. Provide a VERBATIM TRANSCRIPT. Identify speakers: {item['cast']}.
-                    2. Write a 1st person Novel Chapter from {item['pov']}'s POV.
+                    TASK 1: Write a VERBATIM TRANSCRIPT. Label speakers correctly.
+                    TASK 2: Write a Novel Chapter from {item['pov']}'s POV.
                     
-                    CRITICAL: Do not cut off. If dialogue is long, provide it all.
-                    SPLIT SECTIONS WITH: ===SPLIT===
+                    SEPARATOR: Use '===SPLIT===' between Transcript and Novel.
                     """
                     
-                    # Explicitly setting thinking level to high for accuracy
                     response = model.generate_content([gf, prompt])
-                    st.session_state[f"res_{idx}"] = response.text.split("===SPLIT===")
+                    st.session_state[f"prod_{idx}"] = response.text.split("===SPLIT===")
+                    
                 except Exception as e:
-                    st.error(f"AI Error: {str(e)}")
+                    st.error(f"AI Error: {e}")
 
-        # THE SEPARATE BOXES (T-BOX and N-BOX)
-        if f"res_{idx}" in st.session_state:
-            data = st.session_state[f"res_{idx}"]
-            col_t, col_n = st.columns(2)
+        # DISPLAY RESULTS (T-Box & N-Box)
+        if f"prod_{idx}" in st.session_state:
+            res = st.session_state[f"prod_{idx}"]
             
-            with col_t:
+            c1, c2 = st.columns(2)
+            with c1:
                 st.subheader("📜 Transcript (T-Box)")
-                st.text_area("Dialogue", data[0], height=400, key=f"t_{idx}")
-                
-            with col_n:
+                st.text_area("Dialogue", res[0], height=500, key=f"tb_{idx}")
+            with c2:
                 st.subheader(f"📖 {item['pov']}'s Novel (N-Box)")
-                st.text_area("Pov Narrative", data[1] if len(data)>1 else "", height=400, key=f"n_{idx}")
+                st.text_area("Narrative", res[1] if len(res)>1 else "", height=500, key=f"nb_{idx}")
 
-            # DOWNLOAD TO PHONE (Prevents RAM Crash)
+            # DOWNLOAD BUTTON (Safe Mode)
             with open(item['file'], "rb") as f:
-                st.download_button("📥 Save MP4 to Phone", f, file_name=item['file'], mime="video/mp4")
+                st.download_button("📥 Save MP4", f, file_name=item['file'], mime="video/mp4")
