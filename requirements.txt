@@ -1,4 +1,27 @@
-streamlit
-google-generativeai>=0.8.0
-python-docx
-yt-dlp
+# UI
+streamlit>=1.32.0
+
+# Environment variables
+python-dotenv>=1.0.1
+
+# Video downloading
+yt-dlp>=2024.12.23
+
+# Audio / video processing
+ffmpeg-python>=0.2.0
+
+# Speech-to-text
+openai-whisper
+
+# Torch (CPU is fine on Mac)
+torch>=2.1.0
+
+# Speaker diarization (optional, gated)
+pyannote.audio>=3.1
+
+# Gemini (TEXT ONLY – stable)
+google-generativeai>=0.7.2
+
+# Utilities
+requests>=2.31.0
+numpy<2
