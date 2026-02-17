@@ -1,5 +1,6 @@
 import streamlit as st
 import google.generativeai as genai
+from google.generativeai import types
 import subprocess
 import os
 import time
@@ -7,12 +8,11 @@ from datetime import datetime
 from docx import Document
 from io import BytesIO
 
-# --- 1. CONFIGURATION ---
-st.set_page_config(page_title="POV Director's Cut", layout="wide", page_icon="🎬")
+# --- 1. CONFIG & MODEL ---
+st.set_page_config(page_title="POV Director's Cut 2026", layout="wide", page_icon="🎬")
 
-# WE USE PRO FOR ACCURACY, NOT FLASH.
-# 1.5 Pro has the 2 Million token window needed for full 24-minute transcripts.
-MODEL_NAME = "gemini-1.5-pro"
+# The Feb 2026 High-End Model
+MODEL_NAME = "gemini-3-pro-preview"
 
 if "library" not in st.session_state:
     st.session_state.library = []
@@ -21,31 +21,25 @@ api_key = st.secrets.get("GEMINI_API_KEY", "")
 if api_key:
     genai.configure(api_key=api_key)
 
-# --- 2. WORD DOC GENERATOR ---
+# --- 2. WORD EXPORT UTILITY ---
 def create_docx(transcript, novel, pov, show):
     doc = Document()
-    doc.add_heading(f"{show} - {pov} POV", 0)
-    
-    doc.add_heading('Part 1: Verbatim Transcript', level=1)
+    doc.add_heading(f"{show}: {pov} POV Production", 0)
+    doc.add_heading('Full Verbatim Transcript', level=1)
     doc.add_paragraph(transcript)
-    
-    doc.add_break()
-    
-    doc.add_heading(f'Part 2: The Novel ({pov})', level=1)
+    doc.add_page_break()
+    doc.add_heading(f'Novelization: {pov} Perspective', level=1)
     doc.add_paragraph(novel)
     
-    # Save to memory buffer
     buffer = BytesIO()
     doc.save(buffer)
     buffer.seek(0)
     return buffer
 
-# --- 3. DVR ENGINE ---
+# --- 3. DVR DOWNLOADER ---
 def dvr_download(url, cookies=None):
     ts = datetime.now().strftime("%H%M%S")
-    fn = f"master_{ts}.mp4"
-    
-    # H.264 is strictly required for phone compatibility
+    fn = f"master_rec_{ts}.mp4"
     cmd = [
         "yt-dlp", "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
         "--merge-output-format", "mp4", "-o", fn, url
@@ -54,125 +48,96 @@ def dvr_download(url, cookies=None):
         with open("cookies.txt", "wb") as f: f.write(cookies.getbuffer())
         cmd.extend(["--cookies", "cookies.txt"])
 
-    with st.status(f"🎬 Recording Master File..."):
+    with st.status("🎬 Recording Master Copy..."):
         p = subprocess.run(cmd, capture_output=True, text=True)
-        if p.returncode == 0: return fn
-        st.error(f"DVR Error: {p.stderr}")
-        return None
+        return fn if p.returncode == 0 else None
 
 # --- 4. SIDEBAR SETTINGS ---
 with st.sidebar:
-    st.header("🎥 Production Settings")
-    show_title = st.text_input("Show Title", "Wizards Beyond Waverly Place")
+    st.header("⚙️ Studio Setup")
+    show_name = st.text_input("Show Name:", "Wizards Beyond Waverly Place")
     
-    st.subheader("🎭 Cast & Truth Grounding")
-    cast_raw = st.text_area("Cast List (Name: Description)", 
-                           "Roman: Sarcastic wizard.\nBillie: Rebellious lead.\nJustin: Adult mentor.")
-    pov_hero = st.selectbox("Narrator POV:", [line.split(":")[0] for line in cast_raw.split("\n") if ":" in line])
+    cast_input = st.text_area("Cast List (Name: Role)", 
+                             "Roman: Sarcastic wizard\nBillie: Rebellious lead\nJustin: Mentor\nGiada: Mom/Chef")
+    cast_list = [c.split(":")[0].strip() for c in cast_input.split("\n") if ":" in c]
+    pov_hero = st.selectbox("Narrator POV:", cast_list)
     
-    st.info("ℹ️ Tips for Accuracy:\nUse Gemini 1.5 Pro. It is slower but reads the whole video without hallucinating names.")
-    
-    c_file = st.file_uploader("🍪 Upload cookies.txt (Netscape)", type="txt")
+    st.divider()
+    c_file = st.file_uploader("🍪 Upload cookies.txt", type="txt")
 
 # --- 5. MAIN STUDIO ---
-st.title(f"🎬 {show_title}: Director's Cut")
+st.title(f"🎬 {show_name} POV Studio")
+link = st.text_input(f"Paste {show_name} Link:")
 
-# INPUT AREA
-u_input = st.text_input("Paste Video Link:")
-if st.button("🔴 Record & Ingest", use_container_width=True):
-    if u_input:
-        f = dvr_download(u_input, c_file)
-        if f:
-            st.session_state.library.append({"file": f, "pov": pov_hero, "show": show_title, "cast": cast_raw})
-            st.rerun()
+if st.button("🚀 Start Production Pipeline", use_container_width=True):
+    video_file = dvr_download(link, c_file)
+    if video_file:
+        st.session_state.library.append({"file": video_file, "show": show_name, "cast": cast_input, "pov": pov_hero})
+        st.rerun()
 
-# LIBRARY AREA
+# --- 6. PRODUCTION PROCESSING ---
 for idx, item in enumerate(st.session_state.library):
     with st.container(border=True):
-        st.write(f"🎞️ **{item['show']}** | POV: **{item['pov']}**")
+        st.write(f"🎞️ **Episode:** {item['file']} | **POV:** {item['pov']}")
         
-        col_act, col_down = st.columns([1, 1])
-        
-        # ACTION: RUN DEEP ANALYSIS
-        if col_act.button(f"🧠 Deep Analyze (Wiki-Check)", key=f"run_{idx}"):
-            with st.status("🕵️ Phase 1: Watching & Fact-Checking..."):
+        if st.button(f"✨ Run High-Accuracy Analysis", key=f"ai_{idx}"):
+            with st.status("🧠 Gemini 3 Pro is analyzing..."):
                 try:
-                    # Upload
+                    # Upload video
                     gf = genai.upload_file(item['file'])
-                    while gf.state.name == "PROCESSING": time.sleep(2); gf = genai.get_file(gf.name)
+                    while gf.state.name == "PROCESSING":
+                        time.sleep(2)
+                        gf = genai.get_file(gf.name)
                     
-                    # GOOGLE SEARCH GROUNDING (Simulated via Prompt for Streamlit Cloud stability)
-                    # We ask Gemini to use its internal knowledge base heavily
-                    model = genai.GenerativeModel(MODEL_NAME)
+                    # GOOGLE SEARCH GROUNDING TOOL
+                    # This searches for recaps and wikis to fix names/plot
+                    model = genai.GenerativeModel(
+                        model_name=MODEL_NAME,
+                        tools=[{"google_search_retrieval": {}}] 
+                    )
                     
                     prompt = f"""
-                    SYSTEM: You are a professional script supervisor and novelist.
+                    WATCH: The full video provided.
+                    SEARCH: Look up the official episode recap for '{item['show']}' to verify names and plot points.
                     
-                    CONTEXT:
-                    Show: {item['show']}
-                    Cast: {item['cast']}
-                    POV Character: {item['pov']}
+                    TASK 1: FULL VERBATIM TRANSCRIPT
+                    - Do not summarize. Give me every line of dialogue.
+                    - Correctly identify speakers: {item['cast']}.
+                    - Format this section under '[TRANSCRIPT]'.
                     
-                    TASK 1: VERBATIM TRANSCRIPT (The "T-Box")
-                    - Watch the FULL video. Do not summarize.
-                    - Write down every line of dialogue with the correct Speaker Name.
-                    - If you are unsure of a name, describe them (e.g., "Man in Blue Hat").
-                    - Label this section [TRANSCRIPT].
-                    
-                    TASK 2: DEEP NOVELIZATION (The "N-Box")
-                    - Write a book chapter from {item['pov']}'s perspective.
-                    - FOCUS: Internal monologue, sensory details (smell, touch), and psychological depth.
-                    - Do not just describe actions. Describe how {item['pov']} FEELS about the actions.
-                    - Label this section [NOVEL].
-                    
-                    OUTPUT FORMAT:
-                    [TRANSCRIPT]
-                    (Full dialogue here...)
-                    [END TRANSCRIPT]
-                    
-                    [NOVEL]
-                    (Deep POV story here...)
-                    [END NOVEL]
+                    TASK 2: DEEP POV NOVEL
+                    - Write a full chapter from {item['pov']}'s perspective.
+                    - Use 'Deep POV': include internal thoughts, sensory details (smells, textures), and emotions.
+                    - Format this section under '[NOVEL]'.
                     """
                     
-                    st.write("📝 Writing Script & Novel...")
-                    response = model.generate_content([gf, prompt], request_options={"timeout": 600})
-                    st.session_state[f"res_{idx}"] = response.text
-                    
+                    response = model.generate_content([gf, prompt])
+                    st.session_state[f"prod_{idx}"] = response.text
                 except Exception as e:
-                    st.error(f"Analysis Failed: {e}")
+                    st.error(f"Critical AI Error: {e}")
 
-        # DOWNLOAD VIDEO (Safe Mode)
-        with open(item['file'], "rb") as f:
-            col_down.download_button("💾 Save MP4", f, file_name=item['file'], mime="video/mp4")
-
-        # DISPLAY RESULTS
-        if f"res_{idx}" in st.session_state:
-            full_text = st.session_state[f"res_{idx}"]
-            
-            # PARSE THE OUTPUT
+        # DISPLAY & EXPORT
+        if f"prod_{idx}" in st.session_state:
+            raw = st.session_state[f"prod_{idx}"]
             try:
-                t_part = full_text.split("[TRANSCRIPT]")[1].split("[END TRANSCRIPT]")[0].strip()
-                n_part = full_text.split("[NOVEL]")[1].split("[END NOVEL]")[0].strip()
+                t_part = raw.split("[TRANSCRIPT]")[1].split("[NOVEL]")[0].strip()
+                n_part = raw.split("[NOVEL]")[1].strip()
             except:
-                t_part = full_text
-                n_part = "Parsing Error: The AI didn't use the split tags. Check T-Box for full output."
+                t_part, n_part = raw, "Error splitting parts. Check transcript box."
 
-            # T-BOX & N-BOX
-            t_col, n_col = st.columns(2)
-            with t_col:
-                st.subheader("📜 Full Transcript")
-                st.text_area("T-Box", t_part, height=600, key=f"t_{idx}")
-            with n_col:
-                st.subheader(f"📖 Deep POV: {item['pov']}")
-                st.text_area("N-Box", n_part, height=600, key=f"n_{idx}")
+            col_t, col_n = st.columns(2)
+            with col_t:
+                st.subheader("📜 T-Box (Verbatim)")
+                st.text_area("Transcript", t_part, height=500, key=f"t_{idx}")
+            with col_n:
+                st.subheader(f"📖 N-Box ({item['pov']}'s POV)")
+                st.text_area("Novel", n_part, height=500, key=f"n_{idx}")
 
-            # EXPORT TO WORD DOC
-            docx_file = create_docx(t_part, n_part, item['pov'], item['show'])
+            # DOWNLOAD DOCX
+            docx_data = create_docx(t_part, n_part, item['pov'], item['show'])
             st.download_button(
-                label="📄 Export as Word Doc (.docx)",
-                data=docx_file,
-                file_name=f"{item['show']}_{item['pov']}_Script.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key=f"docx_{idx}"
+                "📄 Export to Word Doc", 
+                docx_data, 
+                file_name=f"{item['show']}_Script.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
