@@ -1,7 +1,4 @@
-git+https://github.com/openai/whisper.git
-torch
-torchaudio
-ffmpeg-python
-yt-dlp
+streamlit
+google-generativeai>=0.8.0
 python-docx
-google-generativeai
+yt-dlp
