@@ -7,156 +7,115 @@ import time
 from io import BytesIO
 from docx import Document
 
-# ---------------- 1. CONFIG & API ----------------
-
-st.set_page_config(page_title="Cinematic POV Story Engine", layout="wide")
+# 1. SETUP
+st.set_page_config(page_title="Roman's POV Studio", layout="wide")
 
 api_key = st.secrets.get("GEMINI_API_KEY", "").strip()
 if not api_key:
-    st.error("🔑 API Key missing. Add GEMINI_API_KEY to Streamlit Secrets.")
+    st.error("🔑 API Key missing.")
     st.stop()
 
 genai.configure(api_key=api_key)
 
-# Initialize Session State
-for key, default in [
-    ("transcript", ""),
-    ("chapter", ""),
-    ("processed", False)
-]:
-    if key not in st.session_state:
-        st.session_state[key] = default
-
-# ---------------- 2. HELPERS ----------------
+if "transcript" not in st.session_state: st.session_state.transcript = ""
+if "chapter" not in st.session_state: st.session_state.chapter = ""
 
 def create_docx(title, content):
     doc = Document()
     doc.add_heading(title, 0)
-    doc.add_paragraph(content)
+    for line in content.split("\n"):
+        doc.add_paragraph(line)
     bio = BytesIO()
     doc.save(bio)
     return bio.getvalue()
 
-def get_safety_settings():
-    return {
-        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-    }
-
-def clean_cloud_storage():
-    try:
-        for f in genai.list_files():
-            genai.delete_file(f.name)
-    except:
-        pass
-
-# ---------------- 3. SIDEBAR (The Bible) ----------------
-
+# 2. SIDEBAR
 with st.sidebar:
-    st.header("🎭 Character Bible")
-    cast_info = st.text_area("Cast List (name: role):", 
-        "Giada: Mother\nJustin: Father\nRoman: Protagonist\nTheresa: Grandmother\nBillie: Sister", 
-        height=150)
+    st.header("🎭 Custom Cast List")
+    cast_info = st.text_area("Cast (name: role):", 
+        "Roman: Protagonist/Narrator\nGiada: Mother\nJustin: Father\nBillie: Sister\nTheresa: Grandmother", height=150)
     
-    st.header("👤 POV Settings")
-    pov_choice = st.selectbox("Narrator POV:", ["Roman Russo", "Billie", "Justin", "Giada", "Custom"])
-    if pov_choice == "Custom":
-        pov_choice = st.text_input("Custom Name:", "Narrator")
-
-    st.header("🌐 Bypass Tools")
-    cookie_file = st.file_uploader("Upload cookies.txt (For DisneyNow/DRM)", type=["txt"])
-    
-    if st.button("🗑️ Reset Studio"):
+    st.header("⚙️ Studio Reset")
+    if st.button("🗑️ Clear All"):
         st.session_state.clear()
         st.rerun()
 
-# ---------------- 4. MAIN INTERFACE ----------------
-
+# 3. INPUT
 st.title("🎬 Cinematic POV Story Engine")
-
-tab_up, tab_url = st.tabs(["📁 File Upload (Reliable)", "🌐 URL Sync (Aggressive)"])
+tab_up, tab_url = st.tabs(["📁 Video Upload", "🌐 YouTube / Disney URL"])
 
 with tab_up:
-    file_vid = st.file_uploader("Upload MP4 Video", type=["mp4", "mov"])
+    file_vid = st.file_uploader("Upload Episode", type=["mp4", "mov"])
 with tab_url:
-    url_link = st.text_input("Paste Video URL (DisneyNow, YouTube):")
-    st.caption("⚠️ Use cookies.txt in the sidebar for protected sites.")
+    url_link = st.text_input("Paste URL:")
+    cookie_file = st.file_uploader("Upload cookies.txt (for DisneyNow)", type=["txt"])
 
-# ---------------- 5. PRODUCTION ENGINE ----------------
-
+# 4. PRODUCTION
 if st.button("🚀 START PRODUCTION", use_container_width=True):
-    if not file_vid and not url_link:
-        st.error("Please provide a video file or a URL.")
-    else:
-        with st.status("🎬 Running Production Pipeline...") as status:
-            try:
-                # Resolve Model
-                available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                selected_model = [m for m in available if 'flash' in m.lower()][0] or "models/gemini-1.5-flash"
-                
-                # Cleanup & Save
-                clean_cloud_storage()
-                source = "temp_video.mp4" # FORCING EXTENSION FOR GEMINI
+    with st.status("🎬 Grounding Roman's Perspective...") as status:
+        try:
+            # Cleanup
+            for f in genai.list_files(): genai.delete_file(f.name)
 
-                if file_vid:
-                    with open(source, "wb") as f:
-                        f.write(file_vid.getbuffer())
-                elif url_link:
-                    ydl_cmd = ["yt-dlp", "-f", "best[ext=mp4]", "-o", source]
-                    if cookie_file:
-                        with open("cookies.txt", "wb") as f: f.write(cookie_file.getbuffer())
-                        ydl_cmd.extend(["--cookies", "cookies.txt"])
-                    subprocess.run(ydl_cmd, check=True)
+            source = "temp_video.mp4"
+            if file_vid:
+                with open(source, "wb") as f: f.write(file_vid.getbuffer())
+            elif url_link:
+                ydl_cmd = ["yt-dlp", "-f", "best[ext=mp4]", "-o", source]
+                if cookie_file:
+                    with open("cookies.txt", "wb") as f: f.write(cookie_file.getbuffer())
+                    ydl_cmd.extend(["--cookies", "cookies.txt"])
+                subprocess.run(ydl_cmd, check=True)
 
-                # Upload to Gemini
-                status.update(label="📤 Uploading to AI...", state="running")
-                gem_file = genai.upload_file(path=source)
-                while gem_file.state.name == "PROCESSING":
-                    time.sleep(4)
-                    gem_file = genai.get_file(gem_file.name)
+            # Upload
+            gem_file = genai.upload_file(path=source)
+            while gem_file.state.name == "PROCESSING":
+                time.sleep(3)
+                gem_file = genai.get_file(gem_file.name)
 
-                # Generate Content
-                status.update(label="🧠 Writing Transcript & Novel...", state="running")
-                model = genai.GenerativeModel(selected_model)
-                prompt = f"""
-                CAST: {cast_info}
-                POV: {pov_choice}
-                
-                TASK 1: Full verbatim transcript.
-                ---SPLIT---
-                TASK 2: 2500-word novel chapter in FIRST PERSON from {pov_choice}. 
-                Focus on internal monologue and sensory details. Giada is mother.
-                """
-                
-                response = model.generate_content([gem_file, prompt], safety_settings=get_safety_settings())
+            # --- ROMAN-CENTRIC PROMPT ---
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            prompt = f"""
+            Analyze this video strictly through the eyes of the protagonist: Roman.
+            
+            CAST:
+            {cast_info}
+            
+            TASK 1: VERBATIM TRANSCRIPT
+            - Identify Roman's Dialogue vs. Roman's Voiceover (Narration).
+            - Identify other characters speaking.
+            - Ensure speaker tags are 100% accurate using visual grounding.
+            
+            ---SPLIT---
+            
+            TASK 2: FIRST-PERSON NOVEL CHAPTER
+            - POV: Roman Russo.
+            - Focus: Roman's internal monologue, his feelings, and his unique perspective.
+            - LIMITATION: If Roman is NOT in a scene, write about how he "heard about it later" or what he "discovered happened" after the fact. Do not describe scenes he didn't witness as if he were there.
+            - STYLE: YA Novel, deep sensory detail, roughly 2500 words.
+            """
+            
+            safety = {cat: HarmBlockThreshold.BLOCK_NONE for cat in HarmCategory}
+            response = model.generate_content([gem_file, prompt], safety_settings=safety)
 
-                if response.candidates:
-                    full_text = response.text
-                    if "---SPLIT---" in full_text:
-                        parts = full_text.split("---SPLIT---")
-                        st.session_state.transcript, st.session_state.chapter = parts[0], parts[1]
-                    else:
-                        st.session_state.chapter = full_text
-                    st.session_state.processed = True
-                    st.rerun()
-                else:
-                    st.error("AI Blocked the content. Try a shorter file upload.")
+            if response.text:
+                parts = response.text.split("---SPLIT---")
+                st.session_state.transcript = parts[0].strip() if len(parts) > 0 else ""
+                st.session_state.chapter = parts[1].strip() if len(parts) > 1 else ""
+                st.rerun()
 
-            except Exception as e:
-                st.error(f"Studio Error: {e}")
+        except Exception as e:
+            st.error(f"Error: {e}")
 
-# ---------------- 6. RESULTS ----------------
-
-if st.session_state.processed:
+# 5. BOXES & EXPORTS
+if st.session_state.chapter:
     st.divider()
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("📜 Transcript")
-        st.text_area("T-Preview", st.session_state.transcript, height=400)
-        st.download_button("📥 Save Transcript", create_docx("Transcript", st.session_state.transcript), "Transcript.docx")
+        st.subheader("📜 Verbatim Transcript")
+        st.download_button("📥 Save Transcript (.docx)", create_docx("Transcript", st.session_state.transcript), "Transcript.docx")
+        st.text_area("T-Box", st.session_state.transcript, height=500)
     with col2:
-        st.subheader(f"📖 Novel ({pov_choice})")
-        st.text_area("N-Preview", st.session_state.chapter, height=400)
-        st.download_button("📥 Save Novel", create_docx("Novel", st.session_state.chapter), "Novel.docx")
+        st.subheader("📖 Roman's Perspective")
+        st.download_button("📥 Save Novel (.docx)", create_docx("Roman's Chapter", st.session_state.chapter), "Novel.docx")
+        st.text_area("N-Box", st.session_state.chapter, height=500)
