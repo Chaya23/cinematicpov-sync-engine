@@ -1,111 +1,178 @@
 import streamlit as st
 import google.generativeai as genai
-import subprocess
+import streamlit.components.v1 as components
 import os
 import time
+import subprocess
 from io import BytesIO
 from docx import Document
 
-# ---------------- 1. SETUP ----------------
-st.set_page_config(page_title="Fanfic POV Engine", layout="wide")
+# ---------------- 1. APP CONFIG & STYLING ----------------
+st.set_page_config(page_title="Cinematic POV Engine Pro", layout="wide", page_icon="🎬")
 
+st.markdown("""
+    <style>
+    .stDownloadButton button { width: 100%; border-radius: 5px; background-color: #4CAF50; color: white; }
+    .stTextArea textarea { font-family: 'Courier New', Courier, monospace; }
+    </style>
+    """, unsafe_allow_html=True)
+
+# API KEY SETUP
 api_key = st.secrets.get("GEMINI_API_KEY", "").strip()
-if not api_key:
-    st.error("🔑 Add GEMINI_API_KEY to Streamlit Secrets.")
-    st.stop()
+if api_key:
+    genai.configure(api_key=api_key)
+else:
+    st.error("🔑 Please add GEMINI_API_KEY to your Streamlit Secrets.")
 
-genai.configure(api_key=api_key)
+# ---------------- 2. MINI-DVR JAVASCRIPT ----------------
+dvr_js = """
+<div style="background: #1e1e1e; color: white; padding: 20px; border-radius: 10px; border: 1px solid #333;">
+    <h4 style="margin-top:0;">🔴 Mini-DVR Recorder</h4>
+    <p style="font-size: 12px; color: #aaa;">Record Disney+/YouTube tabs directly. (Turn off Hardware Acceleration in browser settings to avoid black screen).</p>
+    <button id="startBtn" style="background:#ff4b4b; color:white; border:none; padding:10px 15px; border-radius:5px; cursor:pointer;">Start Recording Tab</button>
+    <button id="stopBtn" style="background:#333; color:white; border:none; padding:10px 15px; border-radius:5px; cursor:pointer; margin-left:10px;">Stop & Save</button>
+    <div id="status" style="margin-top:10px; font-weight:bold; color: #4CAF50;">Status: Ready</div>
+</div>
 
-def create_docx(title, content):
+<script>
+    let mediaRecorder;
+    let recordedChunks = [];
+    const statusDiv = document.getElementById('status');
+
+    async function start() {
+        try {
+            const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+            mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+            recordedChunks = [];
+            
+            mediaRecorder.ondataavailable = (e) => { if(e.data.size > 0) recordedChunks.push(e.data); };
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = 'dvr_capture.webm';
+                a.click();
+                statusDiv.innerText = "Status: Video Saved! Upload it below.";
+            };
+
+            mediaRecorder.start();
+            statusDiv.innerText = "Status: 🔴 RECORDING... (Play your video now)";
+        } catch (err) { statusDiv.innerText = "Error: " + err; }
+    }
+
+    document.getElementById('startBtn').onclick = start;
+    document.getElementById('stopBtn').onclick = () => { if(mediaRecorder) mediaRecorder.stop(); };
+</script>
+"""
+
+# ---------------- 3. HELPERS ----------------
+def create_docx(text):
     doc = Document()
-    doc.add_heading(title, 0)
-    for line in content.split("\n"):
+    for line in text.split('\n'):
         doc.add_paragraph(line)
     bio = BytesIO()
     doc.save(bio)
     return bio.getvalue()
 
-# ---------------- 2. SIDEBAR (Sitcom Logic) ----------------
+# ---------------- 4. SIDEBAR (CHARACTER BIBLE) ----------------
 with st.sidebar:
-    st.header("🎭 Sitcom Character Bible")
-    st.info("Sitcoms use 'blocking'. Tell the AI who usually stands where.")
-    visual_cues = (
-        "Roman: Smallest boy, anxious, often wearing layers or 'pillow armor'.\n"
-        "Billie: Rebellious girl, colorful hair, taller than Roman.\n"
-        "Justin: Tall adult male, 'Dad' energy.\n"
-        "Milo: Younger brother, often holding props or animals."
-    )
-    cast_info = st.text_area("Visual Cues:", visual_cues, height=180)
-    pov_choice = st.selectbox("Narrator POV:", ["Roman", "Billie", "Milo", "Justin"])
+    st.title("🎭 Production Desk")
+    model_choice = st.selectbox("AI Brain:", ["Gemini 1.5 Pro (Writing)", "Gemini 1.5 Flash (Speed)"])
+    pov_actor = st.selectbox("Narrator POV:", ["Roman", "Billie", "Justin", "Milo"])
+    
+    st.divider()
+    st.subheader("Visual ID Bible")
+    char_cues = st.text_area("Character Cues (Fixes Name Swaps):", 
+        "Roman: Small boy, brown hair, anxious, wearing a vest.\n"
+        "Billie: Teen girl, streaks in hair, taller than Roman.\n"
+        "Justin: Adult male, glasses, glasses/beard, authority figure.", height=150)
+    
+    st.divider()
+    st.subheader("Bypass Tools")
+    cookie_file = st.file_uploader("Upload cookies.txt for YouTube/DisneyNow", type=["txt"])
 
-# ---------------- 3. PRODUCTION ----------------
-st.title("📚 Fanfic POV Engine")
-st.caption("Optimized for Multi-Camera Sitcom Continuity")
+# ---------------- 5. MAIN INTERFACE ----------------
+st.title("🎥 Cinematic POV Engine")
 
-file_vid = st.file_uploader("Upload Episode", type=["mp4", "mov"])
+tab_record, tab_process = st.tabs(["🔴 1. DVR RECORD", "🧠 2. AI PROCESS"])
 
-if st.button("🚀 START PRODUCTION", use_container_width=True):
-    with st.status("🎬 Analyzing Sitcom Blocking...") as status:
-        source = "temp_video.mp4"
-        try:
-            if file_vid:
-                with open(source, "wb") as f: f.write(file_vid.getbuffer())
+with tab_record:
+    st.subheader("Step 1: Capture Footage")
+    st.info("Open Disney+ or YouTube in a new window, then use the DVR below.")
+    components.html(dvr_js, height=220)
+    st.link_button("📺 Open Disney+", "https://www.disneyplus.com", use_container_width=True)
+
+with tab_process:
+    st.subheader("Step 2: Upload & Generate")
+    col_in1, col_in2 = st.columns(2)
+    with col_in1:
+        vid_file = st.file_uploader("Upload DVR Clip or MP4", type=["webm", "mp4", "mov"])
+    with col_in2:
+        url_link = st.text_input("OR Paste URL (YT/DisneyNow Only)")
+
+    if st.button("🚀 START PRODUCTION", use_container_width=True):
+        if not vid_file and not url_link:
+            st.warning("Please provide a video source.")
+        else:
+            with st.status("🎬 Processing Production...") as status:
+                temp_vid = "input_video.mp4"
                 
-                status.update(label="📤 Uploading for Spatial Analysis...", state="running")
-                gem_file = genai.upload_file(path=source)
+                # Handling URL vs File
+                if vid_file:
+                    with open(temp_vid, "wb") as f: f.write(vid_file.getbuffer())
+                else:
+                    status.update(label="⬇️ Downloading URL (yt-dlp)...")
+                    cmd = ["yt-dlp", "-f", "best[ext=mp4]", "-o", temp_vid, url_link]
+                    if cookie_file:
+                        with open("cookies.txt", "wb") as f: f.write(cookie_file.getbuffer())
+                        cmd.extend(["--cookies", "cookies.txt"])
+                    subprocess.run(cmd)
+
+                # AI Analysis
+                status.update(label="📤 Uploading to Google AI...", state="running")
+                gem_file = genai.upload_file(temp_vid)
                 while gem_file.state.name == "PROCESSING":
                     time.sleep(2)
                     gem_file = genai.get_file(gem_file.name)
 
-                # Use the latest model that worked for you on mobile
-                model = genai.GenerativeModel('gemini-2.5-flash')
-                
-                # SITCOM-SPECIFIC PROMPT
+                model_name = "models/gemini-1.5-pro" if "Pro" in model_choice else "models/gemini-1.5-flash"
+                model = genai.GenerativeModel(model_name)
+
                 prompt = f"""
-                You are analyzing a MULTI-CAMERA SITCOM. 
-                SITCOM RULES: The camera cuts between wide 'master' shots and close-ups. 
-                Track characters based on their 'blocking' (position on stage) and clothing.
+                You are a film editor and novelist. Use these cues: {char_cues}.
                 
-                CHARACTERS: {cast_info}
-                IMPORTANT: Billie is a teen girl. Roman is a younger boy. Do not swap their names.
+                TASK 1: EXACT TRANSCRIPT
+                - Format [Name]: [Dialogue].
+                - Identify based on lip movements and heights. 
+                - Billie and Roman are different; check hair and height!
 
-                TASK 1: FULL TRANSCRIPT
-                - Format as [Name]: [Dialogue]
-                - Include [Audience Laughter] and [Physical Comedy Actions].
-                
-                ---SPLIT---
+                ---SPLIT_HERE---
 
-                TASK 2: FIRST-PERSON NOVEL CHAPTER
-                - POV: {pov_choice}
-                - Style: Young Adult Fiction. 
-                - Translate the sitcom 'jokes' into {pov_choice}'s internal monologue. 
-                - Make it feel like a real book, not a script.
+                TASK 2: FIRST-PERSON NOVEL
+                - POV: {pov_actor}. 
+                - Convert this scene into a deep Young Adult novel chapter.
+                - Focus on {pov_actor}'s internal feelings and observations.
                 """
-                
+
                 response = model.generate_content([gem_file, prompt])
                 
-                if response.text:
-                    parts = response.text.split("---SPLIT---")
+                if "---SPLIT_HERE---" in response.text:
+                    parts = response.text.split("---SPLIT_HERE---")
                     st.session_state.transcript = parts[0].strip()
-                    st.session_state.chapter = parts[1].strip() if len(parts) > 1 else ""
+                    st.session_state.novel = parts[1].strip()
                     st.rerun()
-                    
-        except Exception as e:
-            st.error(f"Error: {e}")
-        finally:
-            if os.path.exists(source): os.remove(source)
 
-# ---------------- 4. DISPLAY ----------------
-if "transcript" in st.session_state and st.session_state.transcript:
+# ---------------- 6. OUTPUT (SEPARATE BOXES) ----------------
+if "transcript" in st.session_state:
     st.divider()
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("📜 Sitcom Transcript")
-        st.download_button("📥 Save Transcript (Word)", create_docx("Transcript", st.session_state.transcript), "Transcript.docx")
-        st.text_area("T-Box", st.session_state.transcript, height=500)
+    col_res1, col_res2 = st.columns(2)
 
-    with col2:
-        st.subheader(f"📖 {pov_choice}'s Internal Monologue")
-        st.download_button("📥 Save Novel (Word)", create_docx("Novel Chapter", st.session_state.chapter), "Novel.docx")
-        st.text_area("N-Box", st.session_state.chapter, height=500)
+    with col_res1:
+        st.subheader("📜 Transcript (T-Box)")
+        st.download_button("📥 Download Transcript (.docx)", create_docx(st.session_state.transcript), f"{pov_actor}_Script.docx", key="dl_t")
+        st.text_area("T-Text", st.session_state.transcript, height=500)
+
+    with col_res2:
+        st.subheader(f"📖 {pov_actor}'s Chapter (N-Box)")
+        st.download_button("📥 Download Novel (.docx)", create_docx(st.session_state.novel), f"{pov_actor}_Novel.docx", key="dl_n")
+        st.text_area("N-Text", st.session_state.novel, height=500)
