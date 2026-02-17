@@ -33,8 +33,17 @@ def create_docx(title, content):
 # ---------------- 2. SIDEBAR (Cast & Cookies) ----------------
 with st.sidebar:
     st.header("🎭 Character Bible")
-    cast_info = st.text_area("Cast List (name: role):", 
-        "Roman: Protagonist/Narrator\nGiada: Mother\nJustin: Father\nBillie: Sister\nTheresa: Grandmother\nWinter: Best Friend", height=200)
+    # Updated cast based on your last input
+    default_cast = (
+        "Roman: Protagonist/Narrator\n"
+        "Giada: Mother\n"
+        "Justin: Father\n"
+        "Billie: Sister\n"
+        "Milo: Brother\n"
+        "Winter: Best Friend\n"
+        "Superintendent Kowalski: Antagonist/Interviewer"
+    )
+    cast_info = st.text_area("Cast List (name: role):", default_cast, height=200)
     
     cast_names = [line.split(":")[0].strip() for line in cast_info.split("\n") if ":" in line]
     pov_choice = st.selectbox("Narrator POV:", ["Roman"] + [n for n in cast_names if n != "Roman"])
@@ -49,7 +58,7 @@ with st.sidebar:
 
 # ---------------- 3. MAIN INTERFACE ----------------
 st.title("🎬 Cinematic POV Story Engine")
-st.caption("AI-Powered Visual Grounding & Narrative Generation")
+st.caption("AI-Powered Visual Grounding for Wizards Beyond Waverly Place")
 
 tab_up, tab_url = st.tabs(["📁 Local Video Upload", "🌐 Streaming URL Sync"])
 
@@ -81,9 +90,8 @@ if st.button("🚀 START PRODUCTION", use_container_width=True):
                 time.sleep(3)
                 gem_file = genai.get_file(gem_file.name)
 
-            # 4.3. Gemini Model & Safety (FIXED MODEL STRING)
-            # The 'models/' prefix and '-latest' suffix ensure compatibility
-            model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
+            # 4.3. MODEL FIX: Use the stable direct string
+            model = genai.GenerativeModel('gemini-1.5-flash')
             
             safety_settings = [
                 {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -92,28 +100,26 @@ if st.button("🚀 START PRODUCTION", use_container_width=True):
                 {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
             ]
 
-            # 4.4. The POV-Focused Prompt
+            # 4.4. Prompt Logic
             prompt = f"""
-            Using visual grounding from the video, perform two tasks.
-            NARRATOR POV: {pov_choice}
+            Identify characters via visual grounding. POV: {pov_choice}.
             CAST BIBLE: {cast_info}
 
             TASK 1: VERBATIM TRANSCRIPT
-            - High-fidelity dialogue capture.
-            - Differentiate Dialogue vs Voiceover (VO).
-            - Tag speakers accurately based on appearance.
+            - Capture all dialogue accurately.
+            - Include Milo's interaction with the guinea pig.
+            - Include Justin's panic about Superintendent Kowalski.
             
             ---SPLIT---
 
             TASK 2: FIRST-PERSON NOVEL CHAPTER
-            - Style: Young Adult Fiction.
-            - Perspective: {pov_choice}'s internal monologue.
-            - Character Context: If {pov_choice} is Roman, emphasize his 'Pillow Armor'—the constant state of anxiety, the feeling of being bullied at school while being ignored by a distracted Justin.
-            - Detail the 'Russo Curse': The heavy burden of having magic you didn't ask for.
+            - Narrator: {pov_choice}.
+            - Focus on Roman's anxiety: the 'Pillow Armor', the Dodgebrawlers, and the feeling that magic is more of a curse than a gift.
+            - Contrast Roman's invisibility with Billie's loud magical mistakes.
             """
 
             # 4.5. Generation
-            status.update(label="🧠 Analyzing and Writing...", state="running")
+            status.update(label="🧠 Writing Transcript & Chapter...", state="running")
             response = model.generate_content([gem_file, prompt], safety_settings=safety_settings)
 
             if response.text:
@@ -125,25 +131,16 @@ if st.button("🚀 START PRODUCTION", use_container_width=True):
         except Exception as e:
             st.error(f"Studio Error: {e}")
         finally:
-            # Clean up local files to prevent memory leaks
             if os.path.exists(source): os.remove(source)
             if os.path.exists("cookies.txt"): os.remove("cookies.txt")
 
-# ---------------- 5. RESULTS & EXPORTS ----------------
+# ---------------- 5. RESULTS ----------------
 if st.session_state.transcript or st.session_state.chapter:
     st.divider()
     col1, col2 = st.columns(2)
-    
     with col1:
         st.subheader("📜 Verbatim Transcript")
-        st.download_button("📥 Save Transcript (.docx)", 
-                           create_docx("Transcript", st.session_state.transcript), 
-                           "Transcript.docx")
         st.text_area("T-Box", st.session_state.transcript, height=550)
-        
     with col2:
         st.subheader(f"📖 {pov_choice}'s Novel Chapter")
-        st.download_button("📥 Save Novel (.docx)", 
-                           create_docx("Novel Chapter", st.session_state.chapter), 
-                           "Novel.docx")
         st.text_area("N-Box", st.session_state.chapter, height=550)
