@@ -11,7 +11,7 @@ st.set_page_config(
     page_icon="🎬"
 )
 
-ALLOWED_SITES = [
+BLOCKED_SITES = [
     "disneynow.com",
     "disneyplus.com",
     "netflix.com",
