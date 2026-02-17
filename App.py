@@ -11,7 +11,7 @@ st.set_page_config(
     page_icon="🎬"
 )
 
-Allowed_SITES = [
+ALLOWED_SITES = [
     "disneynow.com",
     "disneyplus.com",
     "netflix.com",
@@ -148,86 +148,4 @@ st.divider()
 st.caption(
     "⚠️ Legal note: Only upload or process content you own, have permission for, "
     "or that is public domain."
-)                                  compressed = f"compressed_{file_name}"
-                                    compress_video(file_name, compressed)
-
-                                    if not safe_file_exists(compressed):
-                                        status.update(label="❌ Compression failed", state="error")
-                                        st.error("Compressed file not found. Check ffmpeg.")
-                                        continue
-
-                                    # 2. Upload to Gemini
-                                    status.write("📤 Uploading to Gemini...")
-                                    try:
-                                        video_file = genai.upload_file(compressed)
-                                    except Exception as e:
-                                        status.update(label="❌ Upload failed", state="error")
-                                        st.error(f"Gemini upload error: {e}")
-                                        continue
-
-                                    # 3. Wait for processing
-                                    for _ in range(20):
-                                        video_file = genai.get_file(video_file.name)
-                                        state = getattr(video_file, "state", None)
-                                        if state and state.name == "ACTIVE":
-                                            break
-                                        if state and state.name == "FAILED":
-                                            status.update(label="❌ Gemini rejected the file", state="error")
-                                            st.error("Gemini could not process this video.")
-                                            continue
-                                        time.sleep(2)
-
-                                    if not getattr(video_file, "state", None) or video_file.state.name != "ACTIVE":
-                                        status.update(label="❌ Timeout waiting for Gemini", state="error")
-                                        st.error("Gemini took too long to process the file.")
-                                        continue
-
-                                    # 4. Generate transcript + chapter
-                                    status.write("🧠 Generating transcript and POV chapter...")
-                                    model = genai.GenerativeModel("gemini-1.5-pro")
-
-                                    prompt = (
-                                        f"You are a writer watching this video.\n"
-                                        f"POV character: {item['pov']}.\n\n"
-                                        "1. First, produce a full dialogue transcript.\n"
-                                        "2. Then, write a YA-style first-person novel chapter from that POV.\n"
-                                        "Separate the transcript and chapter with a line containing only:\n"
-                                        "---SPLIT---"
-                                    )
-
-                                    response = model.generate_content([video_file, prompt])
-                                    text = (response.text or "").strip()
-                                    parts = text.split("---SPLIT---")
-
-                                    transcript = parts[0].strip() if len(parts) > 0 else ""
-                                    chapter = parts[1].strip() if len(parts) > 1 else ""
-
-                                    st.session_state[f"res_{idx}"] = {
-                                        "transcript": transcript,
-                                        "chapter": chapter,
-                                    }
-
-                                    status.update(label="✅ Finished!", state="complete")
-
-                                except Exception as e:
-                                    status.update(label="❌ Error", state="error")
-                                    st.error(f"Error during AI processing: {e}")
-
-                    # Show results if present
-                    if f"res_{idx}" in st.session_state:
-                        res = st.session_state[f"res_{idx}"]
-                        st.divider()
-                        r1, r2 = st.columns(2)
-                        with r1:
-                            st.subheader("📜 Transcript")
-                            st.text_area("Transcript", res["transcript"], height=300, key=f"t_{idx}")
-                        with r2:
-                            st.subheader(f"📖 {item['pov']}'s Chapter")
-                            st.text_area("Novel", res["chapter"], height=300, key=f"n_{idx}")
-
-                else:
-                    st.warning("⏳ Still downloading or file not ready yet.")
-                    if os.path.exists(log_name):
-                        with st.expander("View download log"):
-                            with open(log_name, "r") as f:
-                                st.code(f.read()[-800:], language="text")
+)
