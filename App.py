@@ -1,247 +1,127 @@
 import os
 import sys
+import time
 import tempfile
 import subprocess
 import traceback
 import streamlit as st
+import google.generativeai as genai
 
-# Ensure local imports work on Streamlit Cloud
-sys.path.append(os.path.dirname(__file__))
+# ---------------- 1. CONFIG & SESSION STATE ----------------
+st.set_page_config(page_title="🎬 CastScript AI Pro", layout="wide", page_icon="🎬")
 
-# ---- Import processor with visible errors ----
-try:
-    from processor import CastScriptEngine
-except Exception:
-    st.set_page_config(page_title="CastScript AI", layout="wide")
-    st.error("❌ Failed to import processor.py")
-    st.code(traceback.format_exc())
-    st.stop()
+# Ensure results persist
+if "final_transcript" not in st.session_state:
+    st.session_state.final_transcript = ""
+if "final_pov" not in st.session_state:
+    st.session_state.final_pov = ""
 
-# ---------------- CONFIG ----------------
-st.set_page_config(
-    page_title="🎬 CastScript AI",
-    layout="wide",
-    page_icon="🎬"
-)
+# AI Setup
+api_key = st.secrets.get("GEMINI_API_KEY", "")
+if api_key:
+    genai.configure(api_key=api_key)
 
-BLOCKED_HINTS = [
-    "disneynow.com",
-    "disneyplus.com",
-    "netflix.com",
-    "primevideo.com",
-    ".m3u8",
-    ".mpd",
-]
+# ---------------- 2. REMOVED RESTRICTIONS & DVR ENGINE ----------------
+# Blocklist removed as requested.
 
-def is_blocked_url(url: str) -> bool:
-    return any(x in (url or "").lower() for x in BLOCKED_HINTS)
-
-def ffmpeg_available() -> bool:
-    try:
-        subprocess.run(
-            ["ffmpeg", "-version"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=True
-        )
-        return True
-    except Exception:
-        return False
-
-def download_video(url: str, output_path: str):
+def download_video(url, output_path, cookies_file=None):
+    """Downloads video using yt-dlp. Uses cookies to bypass login screens."""
     cmd = [
         "yt-dlp",
         "--no-playlist",
-        "-f", "bv*+ba/best",
-        "--merge-output-format", "mp4",
+        "-f", "best[ext=mp4]", 
         "-o", output_path,
         url,
     ]
+    
+    # If user provides cookies.txt, use it to bypass blocks
+    if cookies_file:
+        with open("temp_cookies.txt", "wb") as f:
+            f.write(cookies_file.getbuffer())
+        cmd.extend(["--cookies", "temp_cookies.txt"])
+        
     subprocess.run(cmd, check=True)
 
-# ---------------- UI ----------------
-st.title("🎬 CastScript AI (Universal)")
-st.caption(
-    "Upload or URL → Whisper Transcript → Optional Speaker Diarization → POV Rewrite\n\n"
-    "🚫 DRM streaming platforms are blocked."
-)
+# ---------------- 3. THE ENGINE LOGIC (Merged for zero-import errors) ----------------
+class SimpleEngine:
+    def __init__(self):
+        pass
 
-with st.expander("ℹ️ Read this first"):
-    st.markdown(
+    def rewrite_pov(self, transcript, character_name, cast_info):
+        model = genai.GenerativeModel('gemini-1.5-pro')
+        prompt = f"""
+        CAST: {cast_info}
+        POV CHARACTER: {character_name}
+        
+        TRANSCRIPT:
+        {transcript}
+        
+        TASK: Convert this transcript into a first-person novel chapter from {character_name}'s perspective.
         """
-        **Supported**
-        - YouTube
-        - Public / direct video links
-        - Uploaded files you own
+        response = model.generate_content(prompt)
+        return response.text
 
-        **Not supported**
-        - DisneyNow / Disney+ / Netflix / Prime
-        - `.m3u8` / `.mpd` streams
-        - DRM-protected platforms
+# ---------------- 4. UI INTERFACE ----------------
+st.title("🎬 CastScript AI: Unrestricted Mode")
+st.caption("Universal Video → AI Analysis → POV Rewrite")
 
-        **Streamlit Cloud requirement**
-        Your repo **must** include `packages.txt` with:
-        ```
-        ffmpeg
-        ```
-        """
-    )
-
-# ---------------- SIDEBAR ----------------
 with st.sidebar:
     st.header("⚙️ Settings")
-
-    whisper_model = st.selectbox(
-        "Whisper model",
-        ["tiny", "base", "small", "medium"],
-        index=1
-    )
-
-    enable_diarization = st.checkbox(
-        "Enable speaker diarization (pyannote)",
-        value=False,
-        help="Optional. Safe-fails on Streamlit Cloud."
-    )
-
+    cast_info = st.text_area("Cast (Name - Role)", "Roman - Younger brother\nBillie - Teen girl", height=150)
+    pov_name = st.text_input("Narrator POV", "Roman")
+    
     st.divider()
-    st.header("🎭 POV Rewrite")
+    cookie_upload = st.file_uploader("🍪 Upload cookies.txt (For DisneyNow/YouTube)", type=["txt"])
 
-    cast_info = st.text_area(
-        "Cast members (Name - Role)",
-        placeholder="Roman - Older brother\nBillie - Chosen One\nJustin - Father",
-        height=140
-    )
-
-    pov_name = st.text_input(
-        "Rewrite POV for",
-        placeholder="Roman"
-    )
-
-    st.caption("POV rewrite requires GEMINI_API_KEY.")
-
-# ---------------- INPUT ----------------
+# --- INPUT SECTION ---
 st.subheader("📥 Input")
+url = st.text_input("Paste URL (Any site supported by yt-dlp)")
+uploaded_file = st.file_uploader("Or upload video", type=["mp4", "mkv", "webm"])
 
-url = st.text_input(
-    "Paste URL (YouTube / public video)",
-    placeholder="https://www.youtube.com/watch?v=..."
-)
-
-uploaded_file = st.file_uploader(
-    "Or upload a video file",
-    type=["mp4", "mkv", "mov", "webm", "m4v"]
-)
-
-run_btn = st.button("🚀 Run CastScript", use_container_width=True)
-
-# ---------------- RUN ----------------
-if run_btn:
-    if not ffmpeg_available():
-        st.error(
-            "❌ ffmpeg not available.\n\n"
-            "On Streamlit Cloud, add `packages.txt` with `ffmpeg`."
-        )
-        st.stop()
-
+if st.button("🚀 Run Production", use_container_width=True):
     if not url and not uploaded_file:
-        st.error("Please provide a URL or upload a file.")
-        st.stop()
-
-    if url and is_blocked_url(url):
-        st.error(
-            "🚫 This URL is DRM-protected or manifest-based.\n\n"
-            "Upload a file you own or use a YouTube/public link."
-        )
-        st.stop()
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        video_path = os.path.join(tmpdir, "input.mp4")
-
-        # --- Get video ---
-        if uploaded_file:
-            with open(video_path, "wb") as f:
-                f.write(uploaded_file.read())
-        else:
-            with st.status("Downloading video…", expanded=True) as status:
-                try:
-                    download_video(url, video_path)
-                    status.update(label="✅ Download complete", state="complete")
-                except Exception:
-                    status.update(label="❌ Download failed", state="error")
-                    st.code(traceback.format_exc())
-                    st.stop()
-
-        # Preview
-        try:
-            st.video(video_path)
-        except Exception:
-            pass
-
-        # --- Engine ---
-        with st.status("Initializing engine…", expanded=True):
-            engine = CastScriptEngine(
-                whisper_model=whisper_model,
-                enable_diarization=enable_diarization
-            )
-
-        # --- Process ---
-        with st.status("🎧 Transcribing…", expanded=True):
+        st.error("Please provide a source.")
+    else:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            video_path = os.path.join(tmpdir, "input.mp4")
+            
             try:
-                result = engine.process_video_or_url(video_path)
-            except Exception:
-                st.error("Processing failed.")
-                st.code(traceback.format_exc())
-                st.stop()
-
-        st.success("✅ Done")
-
-        # ---------------- OUTPUT ----------------
-        tab1, tab2, tab3 = st.tabs(
-            ["📜 Transcript", "🗣 Diarization", "✍️ POV Rewrite"]
-        )
-
-        with tab1:
-            st.text_area(
-                "Transcript",
-                result.transcript_text,
-                height=420
-            )
-            st.download_button(
-                "⬇️ Download transcript.txt",
-                result.transcript_text,
-                file_name="transcript.txt"
-            )
-
-        with tab2:
-            if getattr(result, "diarization_error", None):
-                st.warning(result.diarization_error)
-
-            if result.diarization is None:
-                st.info("No diarization available.")
-            else:
-                st.write(result.diarization)
-
-        with tab3:
-            if not pov_name or not cast_info:
-                st.info("Add cast info and POV name in the sidebar.")
-            else:
-                with st.status("Writing POV…", expanded=True):
-                    pov_text = engine.rewrite_pov(
-                        transcript=result.transcript_text,
-                        character_name=pov_name,
-                        cast_info=cast_info
+                # Get the video
+                if uploaded_file:
+                    with open(video_path, "wb") as f:
+                        f.write(uploaded_file.read())
+                else:
+                    with st.status("📥 Recording/Downloading..."):
+                        download_video(url, video_path, cookie_upload)
+                
+                # AI Processing
+                with st.status("🧠 AI is watching & writing..."):
+                    # 1. Upload to Gemini for Transcript
+                    gen_file = genai.upload_file(video_path)
+                    while gen_file.state.name == "PROCESSING":
+                        time.sleep(2)
+                        gen_file = genai.get_file(gen_file.name)
+                    
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    t_resp = model.generate_content([gen_file, "Write a full transcript with speaker names."])
+                    st.session_state.final_transcript = t_resp.text
+                    
+                    # 2. POV Rewrite
+                    engine = SimpleEngine()
+                    st.session_state.final_pov = engine.rewrite_pov(
+                        st.session_state.final_transcript, pov_name, cast_info
                     )
+                
+                st.success("✅ Finished!")
+                
+            except Exception as e:
+                st.error(f"❌ Error: {str(e)}")
+                st.code(traceback.format_exc())
 
-                st.text_area(
-                    f"POV: {pov_name}",
-                    pov_text,
-                    height=420
-                )
-                st.download_button(
-                    "⬇️ Download pov.txt",
-                    pov_text,
-                    file_name=f"pov_{pov_name}.txt"
-                )
-
-st.divider()
-st.caption("Only process content you own or have permission to use.")
+# --- OUTPUT SECTION ---
+if st.session_state.final_transcript:
+    tab1, tab2 = st.tabs(["📜 Transcript (T-Box)", "📖 Novel (N-Box)"])
+    with tab1:
+        st.text_area("Transcript", st.session_state.final_transcript, height=400)
+    with tab2:
+        st.text_area(f"POV: {pov_name}", st.session_state.final_pov, height=400)
