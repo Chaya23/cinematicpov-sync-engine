@@ -1,118 +1,154 @@
-import streamlit as st
-import google.generativeai as genai
-import subprocess
+  import streamlit as st
 import os
-import time
-from datetime import datetime
+import subprocess
+import tempfile
+from processor import CastScriptEngine
 
-# ------------------- CONFIG -------------------
-st.set_page_config(page_title="POV Cloud DVR & Story Engine", layout="wide", page_icon="🎬")
+# ---------------- CONFIG ----------------
+st.set_page_config(
+    page_title="🎬 CastScript AI",
+    layout="wide",
+    page_icon="🎬"
+)
 
-if "recorded_files" not in st.session_state:
-    st.session_state.recorded_files = []
+BLOCKED_SITES = [
+    "disneynow.com",
+    "disneyplus.com",
+    "netflix.com",
+    "primevideo.com",
+    ".m3u8",
+    ".mpd"
+]
 
-api_key = st.secrets.get("GEMINI_API_KEY", "")
-if api_key:
-    genai.configure(api_key=api_key)
-else:
-    st.error("🔑 Missing GEMINI_API_KEY in Streamlit secrets.")
-    st.stop()
+# ---------------- HELPERS ----------------
+def is_supported_url(url: str) -> bool:
+    return not any(b in url.lower() for b in BLOCKED_SITES)
 
-# ------------------- HELPERS -------------------
-def start_dvr(url: str, pov_name: str):
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"rec_{ts}.mp4"
-    log_file = f"log_{ts}.txt"
-
+def download_with_ytdlp(url: str, out_path: str):
     cmd = [
         "yt-dlp",
-        "-f", "best[ext=mp4]/mp4",
+        "-f", "bestvideo+bestaudio/best",
+        "--merge-output-format", "mp4",
         "--no-playlist",
-        "-o", filename,
-        url,
+        "-o", out_path,
+        url
     ]
+    subprocess.run(cmd, check=True)
 
-    with open(log_file, "w") as f:
-        subprocess.Popen(cmd, stdout=f, stderr=f)
+# ---------------- UI ----------------
+st.title("🎬 CastScript AI (Universal)")
+st.caption(
+    "Upload or YouTube → Whisper Transcript → Optional Speaker Diarization → POV Rewrite\n\n"
+    "🚫 DRM streaming platforms are blocked."
+)
 
-    return filename, log_file
+# -------- SETTINGS --------
+with st.sidebar:
+    st.header("⚙️ Settings")
+    whisper_model = st.selectbox(
+        "Whisper model",
+        ["tiny", "base", "small", "medium"],
+        index=1
+    )
+    enable_diarization = st.checkbox("Enable speaker diarization", value=True)
 
-def compress_video(input_path: str, output_path: str):
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", input_path,
-        "-vcodec", "libx264",
-        "-preset", "veryfast",
-        "-crf", "23",
-        "-acodec", "aac",
-        "-b:a", "128k",
-        output_path
-    ]
-    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    st.divider()
+    st.header("🎭 Cast Members")
+    cast_input = st.text_area(
+        "Name - Role (one per line)",
+        placeholder="Roman - Older brother\nBillie - Chosen one\nJustin - Father"
+    )
+    target_pov = st.text_input("Rewrite POV for:", placeholder="Roman")
 
-def safe_file_exists(path: str) -> bool:
-    return os.path.exists(path) and os.path.getsize(path) > 0
+# -------- INPUT --------
+st.subheader("📥 Input")
 
-# ------------------- UI -------------------
-st.title("☁️ POV Cloud DVR & Writing Engine")
+url_input = st.text_input(
+    "Paste URL (YouTube or direct MP4)",
+    placeholder="https://youtube.com/watch?v=..."
+)
 
-tab_queue, tab_library = st.tabs(["📥 Add to Queue", "📚 Library & Results"])
+uploaded_file = st.file_uploader(
+    "Or upload a video file",
+    type=["mp4", "mkv", "mov", "webm", "m4v"]
+)
 
-# ------------------- TAB 1: QUEUE -------------------
-with tab_queue:
-    st.info("Queue URLs you are legally allowed to download. They will be recorded in the background.")
-    video_url = st.text_input("Paste URL:")
-    pov_choice = st.selectbox("Narrator POV:", ["Roman", "Billie", "Justin", "Milo", "Custom"])
-    if pov_choice == "Custom":
-        pov_choice = st.text_input("Custom POV name:", value="Roman")
+run_btn = st.button("🚀 Run CastScript")
 
-    if st.button("🔴 Start Background Recording"):
-        if not video_url:
-            st.error("Please paste a URL first.")
+# ---------------- PROCESS ----------------
+if run_btn:
+    if not url_input and not uploaded_file:
+        st.error("Please provide a URL or upload a video.")
+        st.stop()
+
+    if url_input and not is_supported_url(url_input):
+        st.error(
+            "🚫 This URL is DRM-protected and cannot be processed.\n\n"
+            "Please upload a video file or use YouTube/public links."
+        )
+        st.stop()
+
+    with st.status("Preparing engine...", expanded=True) as status:
+        engine = CastScriptEngine(
+            whisper_model=whisper_model,
+            enable_diarization=enable_diarization
+        )
+        status.update(label="Engine ready", state="complete")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        video_path = os.path.join(tmpdir, "input.mp4")
+
+        if uploaded_file:
+            with open(video_path, "wb") as f:
+                f.write(uploaded_file.read())
         else:
-            fn, log = start_dvr(video_url, pov_choice)
-            st.session_state.recorded_files.append(
-                {
-                    "file": fn,
-                    "log": log,
-                    "pov": pov_choice,
-                    "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                }
+            with st.status("Downloading video...", expanded=True):
+                download_with_ytdlp(url_input, video_path)
+
+        # -------- TRANSCRIBE --------
+        with st.status("🎧 Transcribing audio...", expanded=True):
+            result = engine.process_video_or_url(video_path)
+
+        # -------- OUTPUT --------
+        st.success("Transcription complete!")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.subheader("📜 Transcript")
+            st.text_area(
+                "Transcript",
+                result.transcript_text,
+                height=400
             )
-            st.success(f"Queued recording: {fn}")
-            st.toast("Recording started in background.")
 
-# ------------------- TAB 2: LIBRARY -------------------
-with tab_library:
-    if st.button("🔄 Refresh Library"):
-        st.rerun()
+        with col2:
+            if target_pov and cast_input:
+                with st.status("✍️ Writing POV chapter...", expanded=True):
+                    pov_text = engine.rewrite_pov(
+                        transcript=result.transcript_text,
+                        character_name=target_pov,
+                        cast_info=cast_input
+                    )
+                st.subheader(f"📖 POV Chapter — {target_pov}")
+                st.text_area(
+                    "POV Rewrite",
+                    pov_text,
+                    height=400
+                )
+            else:
+                st.info("Add cast info and POV name to enable rewrite.")
 
-    if not st.session_state.recorded_files:
-        st.write("No recordings yet. Add one in the 'Add to Queue' tab.")
-    else:
-        for idx, item in enumerate(st.session_state.recorded_files):
-            file_name = item["file"]
-            log_name = item["log"]
+        # -------- DIARIZATION --------
+        if result.diarization:
+            st.subheader("🗣 Speaker Diarization")
+            st.write(result.diarization)
 
-            with st.container(border=True):
-                col_info, col_play, col_write = st.columns([2, 1, 1])
-
-                with col_info:
-                    st.write(f"🎥 **{file_name}**")
-                    st.caption(f"POV: {item['pov']} | Added: {item['created_at']}")
-
-                if safe_file_exists(file_name):
-                    with col_play:
-                        if st.button("📺 Play", key=f"play_{idx}"):
-                            st.video(file_name)
-
-                    with col_write:
-                        if st.button("✍️ Write Story", key=f"write_{idx}"):
-                            with st.status("AI is analyzing the footage...", expanded=True) as status:
-                                try:
-                                    # 1. Compress for Gemini
-                                    status.write("🔧 Compressing video for Gemini compatibility...")
-                                    compressed = f"compressed_{file_name}"
+st.divider()
+st.caption(
+    "⚠️ Legal note: Only upload or process content you own, have permission for, "
+    "or that is public domain."
+)                                  compressed = f"compressed_{file_name}"
                                     compress_video(file_name, compressed)
 
                                     if not safe_file_exists(compressed):
