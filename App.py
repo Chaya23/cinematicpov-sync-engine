@@ -3,149 +3,116 @@ import google.generativeai as genai
 import subprocess
 import os
 import time
-import tempfile
 import traceback
 from datetime import datetime
 
 # ------------------- 1. CONFIG & REFRESH -------------------
-st.set_page_config(page_title="POV Cinema Studio 2026", layout="wide", page_icon="🎬")
+st.set_page_config(page_title="POV DVR Engine", layout="wide", page_icon="📽️")
 
-# SESSION STATE: Keeps your files and results alive
 if "recorded_files" not in st.session_state:
     st.session_state.recorded_files = []
 
-# API SETUP (FIXED MODEL NAME FOR 2026)
-# Gemini 1.5 is discontinued. We now use 2.0-flash for high-speed tasks.
+# FIX: Use Gemini 2.0-Flash to avoid 404
 MODEL_NAME = "gemini-2.0-flash" 
-
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 if api_key:
     genai.configure(api_key=api_key)
-else:
-    st.error("🔑 Error: Missing GEMINI_API_KEY in Secrets!")
 
-# ------------------- 2. THE DVR ENGINE (UNRESTRICTED) -------------------
-def start_dvr(url, cookies_file=None):
-    """
-    Simulates PlayOn 'Cloud Recording'. 
-    Grabs the video in the background so you don't have to watch.
-    """
+# ------------------- 2. THE DVR ENGINE (FORCE MP4) -------------------
+def run_dvr_with_progress(url, cookies_file=None):
+    """Downloads and merges into a REAL MP4 with live log output."""
     timestamp = datetime.now().strftime("%H%M%S")
-    filename = f"rec_{timestamp}.mp4"
-    log_file = f"log_{filename}.txt"
+    filename = f"dvr_rec_{timestamp}.mp4"
+    log_file = f"log_{timestamp}.txt"
     
-    # UNRESTRICTED: No blocked_hints here.
+    # 2026 Pro Flags: Force MP4 merge and H.264/AAC for max compatibility
     cmd = [
         "yt-dlp",
+        "--newline",
         "--no-playlist",
-        "-f", "best[ext=mp4]", 
+        "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4] / bv*+ba/b",
+        "--merge-output-format", "mp4",
         "-o", filename,
         url
     ]
     
-    # Use cookies for sites like DisneyNow/YouTube
     if cookies_file:
         with open("temp_cookies.txt", "wb") as f:
             f.write(cookies_file.getbuffer())
         cmd.extend(["--cookies", "temp_cookies.txt"])
-    
-    # Run silently in background
-    with open(log_file, "w") as f:
-        subprocess.Popen(cmd, stdout=f, stderr=f)
-    
-    return filename, log_file
 
-# ------------------- 3. INTERFACE -------------------
-st.title("🎬 POV Cloud DVR & Production Studio")
-st.caption("Universal Recording → AI Analysis → Roman's Fanfic POV")
-
-tab_queue, tab_library = st.tabs(["📥 Add to Queue", "📚 Library & Results"])
-
-with tab_queue:
-    st.info("Paste a link to queue a 'Cloud Recording'. It speeds through the data in the background.")
-    video_url = st.text_input("Paste Video URL (YouTube, Disney, etc.):")
-    
-    col_a, col_b = st.columns(2)
-    with col_a:
-        pov_choice = st.selectbox("Narrator POV:", ["Roman", "Billie", "Justin", "Milo"])
-    with col_b:
-        cookie_upload = st.file_uploader("🍪 Upload cookies.txt (Optional)", type=["txt"])
-
-    if st.button("🔴 Start Background Recording", use_container_width=True):
-        if video_url:
-            fn, log = start_dvr(video_url, cookie_upload)
-            st.session_state.recorded_files.append({
-                "file": fn, "log": log, "pov": pov_choice, "status": "Recording"
-            })
-            st.success(f"Successfully Queued: {fn}. You can close the app now.")
+    # We use st.status to show the "Figure Running"
+    with st.status(f"🎬 DVR Recording: {filename}", expanded=True) as status:
+        st.write("Initializing stream...")
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        
+        # This loop reads the yt-dlp output and shows it in the app live!
+        log_display = st.empty()
+        full_log = ""
+        for line in process.stdout:
+            full_log += line
+            log_display.code(line) # Show the last line of the download
+            if "[download] 100%" in line:
+                st.write("Merging Video & Audio... (FFmpeg running)")
+        
+        process.wait()
+        if process.returncode == 0:
+            status.update(label="✅ Recording Saved Successfully!", state="complete")
+            return filename
         else:
-            st.error("Please paste a link first!")
+            status.update(label="❌ Recording Failed", state="error")
+            st.error(full_log[-500:]) # Show the last bit of the error log
+            return None
+
+# ------------------- 3. UI INTERFACE -------------------
+st.title("🎬 POV Cloud DVR Studio")
+
+tab_record, tab_library = st.tabs(["🔴 New Recording", "📚 Library"])
+
+with tab_record:
+    url = st.text_input("Paste Link (DisneyNow, YouTube, etc.):")
+    pov = st.selectbox("Novel POV:", ["Roman", "Billie", "Milo"])
+    cookies = st.file_uploader("🍪 cookies.txt (Upload for Disney/Netflix)", type=["txt"])
+    
+    if st.button("🚀 Start DVR Process"):
+        if url:
+            saved_file = run_dvr_with_progress(url, cookies)
+            if saved_file:
+                st.session_state.recorded_files.append({"file": saved_file, "pov": pov})
+                st.balloons()
+        else:
+            st.error("Please enter a URL.")
 
 with tab_library:
-    if st.button("🔄 Refresh Status"):
-        st.rerun()
-
     if not st.session_state.recorded_files:
-        st.write("No active recordings. Queue one up!")
+        st.info("Your library is empty. Start a recording!")
     else:
         for idx, item in enumerate(st.session_state.recorded_files):
-            file_name = item['file']
-            log_name = item['log']
-            
-            with st.container(border=True):
-                col1, col2, col3 = st.columns([2, 1, 1])
-                with col1:
-                    st.write(f"🎥 **{file_name}**")
-                    st.caption(f"Target POV: {item['pov']}")
-                
-                # Check if file is ready
-                if os.path.exists(file_name) and os.path.getsize(file_name) > 1000:
-                    with col2:
-                        if st.button("📺 Play Test", key=f"play_{idx}"):
-                            st.video(file_name)
-                    with col3:
-                        if st.button("✨ Write Novel", key=f"write_{idx}"):
-                            with st.status("AI Analyzing Video...", expanded=True) as status:
-                                try:
-                                    # 1. Upload to Google (2026 way)
-                                    status.write("Uploading file to AI...")
-                                    gen_file = genai.upload_file(file_name)
-                                    while gen_file.state.name == "PROCESSING":
-                                        time.sleep(2)
-                                        gen_file = genai.get_file(gen_file.name)
-                                    
-                                    # 2. Use Gemini 2.0-Flash (Fixed 404)
-                                    status.write(f"AI is watching with {MODEL_NAME}...")
-                                    model = genai.GenerativeModel(MODEL_NAME)
-                                    prompt = f"""
-                                    Identify characters from 'Wizards Beyond Waverly Place'.
-                                    TASK 1: Write a full transcript with speaker names.
-                                    TASK 2: Write a detailed novel chapter from {item['pov']}'s perspective.
-                                    Split the sections with '---SPLIT---'
-                                    """
-                                    response = model.generate_content([gen_file, prompt])
-                                    
-                                    # Store results in session state
-                                    st.session_state[f"res_{idx}"] = response.text.split("---SPLIT---")
-                                    status.update(label="✅ Success!", state="complete")
-                                except Exception as e:
-                                    st.error(f"AI Error: {str(e)}")
-                                    st.code(traceback.format_exc())
-                else:
-                    st.warning("⏳ Still Downloading in background...")
-                    with st.expander("Check Progress Log"):
-                        if os.path.exists(log_name):
-                            with open(log_name, "r") as f:
-                                st.code(f.read()[-500:]) # Last few lines of log
-
-                # --- THE RESULT BOXES (T-BOX & N-BOX) ---
-                if f"res_{idx}" in st.session_state:
-                    res = st.session_state[f"res_{idx}"]
-                    st.divider()
-                    box1, box2 = st.columns(2)
-                    with box1:
-                        st.subheader("📜 Transcript (T-Box)")
-                        st.text_area("T-Text", res[0], height=300, key=f"t_{idx}")
-                    with box2:
-                        st.subheader(f"📖 {item['pov']}'s Novel (N-Box)")
-                        st.text_area("N-Text", res[1] if len(res)>1 else "", height=300, key=f"n_{idx}")
+            file_path = item['file']
+            if os.path.exists(file_path):
+                with st.container(border=True):
+                    col_info, col_btn = st.columns([3, 1])
+                    col_info.write(f"🎞️ **{file_path}**")
+                    col_info.caption(f"Target POV: {item['pov']}")
+                    
+                    if col_btn.button("✨ Run AI Production", key=f"ai_{idx}"):
+                        with st.status("AI is watching the recording...") as status:
+                            # 1. Upload
+                            video_file = genai.upload_file(file_path)
+                            while video_file.state.name == "PROCESSING":
+                                time.sleep(2)
+                                video_file = genai.get_file(video_file.name)
+                            
+                            # 2. Write (T-Box and N-Box)
+                            model = genai.GenerativeModel(MODEL_NAME)
+                            prompt = f"POV: {item['pov']}. Write 1: Transcript. 2: Novel Chapter. Split with: ---"
+                            resp = model.generate_content([video_file, prompt])
+                            
+                            parts = resp.text.split("---")
+                            st.subheader("📜 Transcript")
+                            st.text_area("T-Box", parts[0], height=200)
+                            st.subheader(f"📖 {item['pov']}'s Novel")
+                            st.text_area("N-Box", parts[1] if len(parts)>1 else "", height=300)
+                            status.update(label="✅ Production Complete!", state="complete")
+            else:
+                st.error(f"Missing file: {file_path}")
