@@ -49,7 +49,7 @@ with st.sidebar:
 
 # ---------------- 3. MAIN INTERFACE ----------------
 st.title("🎬 Cinematic POV Story Engine")
-st.caption("Now powered by Gemini 3 Flash")
+st.caption("AI-Powered Visual Grounding & Narrative Generation")
 
 tab_up, tab_url = st.tabs(["📁 Local Video Upload", "🌐 Streaming URL Sync"])
 
@@ -81,17 +81,16 @@ if st.button("🚀 START PRODUCTION", use_container_width=True):
                 time.sleep(3)
                 gem_file = genai.get_file(gem_file.name)
 
-            # 4.3. Gemini 3 Model & Safety Logic (FIXED)
-            # Using 'gemini-3-flash' to solve the 404 error
-            model = genai.GenerativeModel('gemini-3-flash')
+            # 4.3. Gemini Model & Safety (FIXED MODEL STRING)
+            # The 'models/' prefix and '-latest' suffix ensure compatibility
+            model = genai.GenerativeModel('models/gemini-1.5-flash-latest')
             
-            # Updated safety categories for 2026 API
-            safety_settings = {
-                "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
-                "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
-                "HARM_CATEGORY_SEXUAL": "BLOCK_NONE",
-                "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
-            }
+            safety_settings = [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+            ]
 
             # 4.4. The POV-Focused Prompt
             prompt = f"""
@@ -102,15 +101,15 @@ if st.button("🚀 START PRODUCTION", use_container_width=True):
             TASK 1: VERBATIM TRANSCRIPT
             - High-fidelity dialogue capture.
             - Differentiate Dialogue vs Voiceover (VO).
-            - Tag speakers accurately.
+            - Tag speakers accurately based on appearance.
             
             ---SPLIT---
 
             TASK 2: FIRST-PERSON NOVEL CHAPTER
             - Style: Young Adult Fiction.
             - Perspective: {pov_choice}'s internal monologue.
-            - Special Instruction: If {pov_choice} is Roman, emphasize his 'Pillow Armor' mentality—the feeling of being bullied, ignored by adults (Justin), and the stress of the 'Russo Curse'. 
-            - Focus on sensory details: the smell of the sub shop, the weight of the wand, the fear of magic going wrong.
+            - Character Context: If {pov_choice} is Roman, emphasize his 'Pillow Armor'—the constant state of anxiety, the feeling of being bullied at school while being ignored by a distracted Justin.
+            - Detail the 'Russo Curse': The heavy burden of having magic you didn't ask for.
             """
 
             # 4.5. Generation
@@ -126,6 +125,7 @@ if st.button("🚀 START PRODUCTION", use_container_width=True):
         except Exception as e:
             st.error(f"Studio Error: {e}")
         finally:
+            # Clean up local files to prevent memory leaks
             if os.path.exists(source): os.remove(source)
             if os.path.exists("cookies.txt"): os.remove("cookies.txt")
 
