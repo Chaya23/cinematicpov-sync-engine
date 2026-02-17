@@ -20,6 +20,7 @@ if not api_key:
 
 genai.configure(api_key=api_key)
 
+# Session state defaults
 for key, default in [
     ("transcript_raw", ""),
     ("plot_summary", ""),
@@ -121,8 +122,6 @@ def download_audio_from_url(url: str, cookie_file):
     cmd.append(url)
     subprocess.run(cmd, check=True)
     return audio_out
-
-
 # ---------------- SIDEBAR ----------------
 
 with st.sidebar:
@@ -163,78 +162,124 @@ with st.sidebar:
 
 st.title("🎬 Cinematic POV Story Engine")
 
-mode = st.radio("Mode", ["Mobile (light)", "Desktop (full)"])
+mode = st.radio(
+    "Choose mode:",
+    ["Mobile (light)", "Desktop (full)"],
+    horizontal=True
+)
 
 st.markdown(
     """
-- **Mobile (light)**: audio upload only, Gemini does transcription + story (no yt-dlp, no Whisper, no video).  
-- **Desktop (full)**: URL + upload + downloader, Whisper-medium, yt-dlp, Gemini can watch uploaded MP4s.  
+### 📱 Mobile (light)
+- Upload **MP4 or audio**
+- Gemini **watches video**, extracts audio, **transcribes**, summarizes, tags speakers, writes novel  
+- **One‑pass pipeline**  
+- **No Whisper**, **no ffmpeg**, **no yt‑dlp**  
+- Designed to avoid mobile crashes  
+
+### 💻 Desktop (full)
+- URL extraction (DisneyNow, Disney+, YouTube)  
+- **cookies.txt** support  
+- yt‑dlp extracts **audio only**  
+- Upload MP4 or audio  
+- Gemini can watch uploaded MP4s  
+- **Dropdown to choose transcription method:** Whisper or Gemini  
+- Downloader tab (MP4 only)  
 """
 )
-
-
-# ---------------- MOBILE (LIGHT) MODE ----------------
+# ---------------- MOBILE MODE (LIGHT) ----------------
 
 if mode == "Mobile (light)":
-    st.subheader("📱 Mobile mode – audio only, Gemini does everything")
+    st.subheader("📱 Mobile Mode — Gemini-only (MP4-safe, no Whisper, no yt‑dlp)")
 
-    mobile_audio = st.file_uploader(
-        "Upload a short audio clip (MP3 / M4A / WAV, ideally < 10–15 minutes)",
-        type=["mp3", "m4a", "wav", "aac"],
+    mobile_file = st.file_uploader(
+        "Upload MP4 or audio (Gemini will watch/listen and do everything)",
+        type=["mp4", "mov", "mkv", "mp3", "wav", "m4a", "aac"],
     )
 
-    live_notes = st.text_area(
+    mobile_notes = st.text_area(
         "Director / writer notes (optional):",
-        placeholder="Tone, themes, what to emphasise in the chapter...",
+        placeholder="Tone, themes, emotions, pacing, etc.",
         height=150,
     )
 
-    if st.button("🚀 Run mobile pipeline", use_container_width=True):
-        if not mobile_audio:
-            st.error("Please upload an audio file.")
+    if st.button("🚀 Run Mobile Pipeline", use_container_width=True):
+        if not mobile_file:
+            st.error("Please upload a video or audio file.")
         else:
-            with st.status("Running mobile pipeline with Gemini only...", expanded=True) as status:
+            with st.status("Running Gemini one‑pass pipeline...", expanded=True) as status:
                 try:
                     clean_temp_files()
 
-                    # Save audio
-                    audio_path = "temp_audio_source"
-                    with open(audio_path, "wb") as f:
-                        f.write(mobile_audio.getbuffer())
+                    # Save uploaded file
+                    temp_path = "temp_mobile_upload"
+                    with open(temp_path, "wb") as f:
+                        f.write(mobile_file.getbuffer())
 
-                    status.update(label="📤 Uploading audio to Gemini...", state="running")
+                    status.update(label="📤 Uploading media to Gemini...", state="running")
                     model = get_gemini_model()
                     safety = get_safety_settings()
-                    audio_file_obj = upload_file_to_gemini(audio_path)
 
-                    # 1. Gemini: transcribe + summary
-                    status.update(label="📝 Gemini transcribing + summarising...", state="running")
+                    gem_file = upload_file_to_gemini(temp_path)
 
-                    transcribe_prompt = f"""
-You are a careful transcriber and story analyst.
+                    if not gem_file:
+                        st.error("Gemini could not process the uploaded file.")
+                        st.stop()
+
+                    status.update(label="🧠 Gemini watching video + transcribing + summarizing + tagging + writing novel...", state="running")
+
+                    # ONE-PASS PROMPT
+                    one_pass_prompt = f"""
+You are a masterful multimodal AI who can watch video, extract audio, transcribe speech,
+summarize events, identify speakers, and write a YA-style novel chapter.
 
 CAST (name: role):
 {cast_info}
 
-TASK:
-1. First, transcribe the audio as accurately as possible.
-2. Then, write a clear plot summary of what happens.
-3. Then, rewrite the transcript with speaker tags using the cast list when possible.
+PRIMARY POV:
+{pov_choice}
 
-Return your answer in three sections with clear headings:
+FOCUS CHARACTERS:
+{", ".join(focus_characters)}
+
+DIRECTOR NOTES:
+{mobile_notes}
+
+TASK:
+1. Watch/listen to the uploaded media.
+2. Transcribe all dialogue.
+3. Write a clear plot summary.
+4. Rewrite the transcript with speaker tags using the cast list.
+5. Write a ~2500-word YA-style novel chapter in FIRST PERSON from {pov_choice}.
+6. Use emotional depth, internal thoughts, sensory detail, and character-driven pacing.
+7. Keep Giada explicitly the mother if she appears.
+8. Output ONLY the following sections:
+
 [TRANSCRIPT]
+(full raw transcript)
+
 [SUMMARY]
+(plot summary)
+
 [TAGGED_TRANSCRIPT]
+(transcript with speaker names)
+
+[CHAPTER]
+(full YA-style novel chapter)
 """
 
-                    contents = [audio_file_obj, transcribe_prompt] if audio_file_obj else [transcribe_prompt]
-                    resp = model.generate_content(contents=contents, safety_settings=safety)
+                    resp = model.generate_content(
+                        contents=[gem_file, one_pass_prompt],
+                        safety_settings=safety
+                    )
+
                     full_text = (resp.text or "").strip()
 
-                    # Very simple splitting by headings
+                    # Parse sections
                     transcript_raw = ""
                     plot_summary = ""
                     transcript_tagged = ""
+                    chapter_text = ""
 
                     current = None
                     for line in full_text.splitlines():
@@ -248,96 +293,70 @@ Return your answer in three sections with clear headings:
                         if l.upper().startswith("[TAGGED_TRANSCRIPT"):
                             current = "tt"
                             continue
+                        if l.upper().startswith("[CHAPTER"):
+                            current = "c"
+                            continue
+
                         if current == "t":
                             transcript_raw += line + "\n"
                         elif current == "s":
                             plot_summary += line + "\n"
                         elif current == "tt":
                             transcript_tagged += line + "\n"
+                        elif current == "c":
+                            chapter_text += line + "\n"
 
+                    # Save to session
                     st.session_state.transcript_raw = transcript_raw.strip()
                     st.session_state.plot_summary = plot_summary.strip()
-                    st.session_state.transcript_tagged = transcript_tagged.strip() or transcript_raw.strip()
-
-                    # 2. Gemini: chapter
-                    status.update(label="📖 Gemini writing YA-style POV chapter...", state="running")
-
-                    focus_str = ", ".join(focus_characters) if focus_characters else "all characters"
-
-                    novel_prompt = f"""
-You are a skilled YA novelist.
-
-CAST (name: role):
-{cast_info}
-
-PLOT SUMMARY:
-\"\"\"{st.session_state.plot_summary}\"\"\"
-
-PRIMARY NARRATOR POV:
-{pov_choice}
-
-FOCUS CHARACTERS:
-{focus_str}
-
-DIRECTOR / WRITER NOTES:
-{live_notes}
-
-SOURCE TRANSCRIPT (each line tagged with speaker if available):
-\"\"\"{st.session_state.transcript_tagged}\"\"\"
-
-TASK:
-Using the tagged transcript and plot summary as the backbone, write a ~2500-word YA-style novel chapter.
-
-REQUIREMENTS:
-- First-person POV from {pov_choice}.
-- Show rich internal thoughts, emotions, and reactions of {pov_choice}.
-- Use the speaker tags to keep who-said-what consistent with the transcript.
-- Include interactions and dialogue with the other characters, especially: {focus_str}.
-- Keep the tone grounded, emotional, and character-driven, like a young adult contemporary / drama.
-- Preserve the key events and emotional beats from the plot summary and transcript, but you may add internal monologue, sensory detail, and subtle expansions.
-- Make Giada explicitly the mother if she appears.
-- Do NOT include analysis, explanation, or meta-commentary. Output ONLY the story text.
-"""
-
-                    novel_resp = model.generate_content(contents=novel_prompt, safety_settings=safety)
-                    chapter_text = (novel_resp.text or "").strip()
-                    st.session_state.chapter = chapter_text
+                    st.session_state.transcript_tagged = transcript_tagged.strip()
+                    st.session_state.chapter = chapter_text.strip()
                     st.session_state.processed = True
 
-                    status.update(label="✅ Done! Results below.", state="complete")
+                    status.update(label="✅ Mobile pipeline complete!", state="complete")
                     clean_temp_files()
 
                 except Exception as e:
                     st.error(f"Error: {e}")
                     clean_temp_files()
-
-# ---------------- DESKTOP (FULL) MODE ----------------
+# ---------------- DESKTOP MODE (FULL) ----------------
 
 else:
-    st.subheader("💻 Desktop mode – full pipeline (URL + upload + Whisper + yt-dlp)")
+    st.subheader("💻 Desktop Mode — Full Pipeline")
 
     tab_url, tab_upload, tab_notes, tab_downloader = st.tabs(
-        ["🌐 URL (audio-only)", "📁 Upload (MP4 or audio)", "📝 Writer notes", "⬇️ Download URL video only"]
+        ["🌐 URL (audio-only)", "📁 Upload (MP4 or audio)", "📝 Writer notes", "⬇️ Downloader (MP4 only)"]
     )
 
+    # ---------------- URL TAB ----------------
     with tab_url:
         url_link = st.text_input("Paste streaming URL (DisneyNow, Disney+, YouTube, etc.):")
 
+        transcription_method = st.selectbox(
+            "Transcription method:",
+            ["Whisper‑medium (local)", "Gemini (cloud transcription)"],
+            index=0
+        )
+
+    # ---------------- UPLOAD TAB ----------------
     with tab_upload:
         upload_file = st.file_uploader(
             "Upload MP4 video or audio file",
             type=["mp4", "mov", "mkv", "mp3", "wav", "m4a", "aac"],
         )
 
+    # ---------------- NOTES TAB ----------------
     with tab_notes:
-        live_notes = st.text_area(
+        desktop_notes = st.text_area(
             "Director / writer notes (optional):",
-            placeholder="Tone, themes, what to emphasise in the chapter...",
+            placeholder="Tone, themes, pacing, emotional beats...",
             height=150,
         )
 
+    # ---------------- DOWNLOADER TAB ----------------
     with tab_downloader:
         st.subheader("Download streaming video to a file (no AI, just save it)")
+
         dl_url = st.text_input("Streaming URL", key="dl_url")
         dl_cookies = st.file_uploader("cookies.txt (required for many sites)", type=["txt"], key="dl_cookies")
 
@@ -383,7 +402,9 @@ else:
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-    if st.button("🚀 Run desktop pipeline", use_container_width=True):
+    # ---------------- RUN DESKTOP PIPELINE ----------------
+
+    if st.button("🚀 Run Desktop Pipeline", use_container_width=True):
         if not url_link and not upload_file:
             st.error("Please provide a URL or upload a file.")
         else:
@@ -392,17 +413,17 @@ else:
                     clean_temp_files()
                     st.session_state.has_video_upload = False
 
-                    # 1. Get audio (URL mode = audio only)
+                    # 1. GET MEDIA (URL or upload)
                     status.update(label="⬇️ Getting media...", state="running")
 
                     if url_link:
                         if "disneynow.com" in url_link.lower() and not cookie_file:
                             st.error("DisneyNow URLs require cookies.txt.")
                             st.stop()
+
                         audio_source_path = download_audio_from_url(url_link, cookie_file)
 
                     else:
-                        # Upload mode
                         ext = os.path.splitext(upload_file.name)[1].lower()
                         if ext in [".mp4", ".mov", ".mkv"]:
                             video_path = "temp_video_upload.mp4"
@@ -415,43 +436,45 @@ else:
                             with open(audio_source_path, "wb") as f:
                                 f.write(upload_file.getbuffer())
 
-                    # 2. Extract audio
+                    # 2. EXTRACT AUDIO (only if video)
                     status.update(label="🎧 Extracting audio...", state="running")
-                    audio_path = extract_audio(audio_source_path)
 
-                    # 3. Whisper transcription
-                    status.update(label="📝 Transcribing with Whisper medium...", state="running")
-                    transcript_raw = whisper_transcribe(audio_path)
+                    ext = os.path.splitext(audio_source_path)[1].lower()
+                    if ext in [".mp4", ".mov", ".mkv"]:
+                        audio_path = extract_audio(audio_source_path)
+                    else:
+                        audio_path = audio_source_path
+
+                    # 3. TRANSCRIPTION (Whisper or Gemini)
+                    status.update(label="📝 Transcribing...", state="running")
+
+                    if transcription_method.startswith("Whisper"):
+                        transcript_raw = whisper_transcribe(audio_path)
+
+                    else:
+                        model = get_gemini_model()
+                        safety = get_safety_settings()
+                        gem_audio = upload_file_to_gemini(audio_path)
+
+                        trans_prompt = """
+You are a careful transcriber. Transcribe the audio exactly as spoken.
+Return ONLY the transcript.
+"""
+                        resp = model.generate_content(
+                            contents=[gem_audio, trans_prompt],
+                            safety_settings=safety
+                        )
+                        transcript_raw = (resp.text or "").strip()
+
                     st.session_state.transcript_raw = transcript_raw
 
-                    # 4. Gemini model
+                    # 4. GEMINI SUMMARY
+                    status.update(label="📚 Generating plot summary...", state="running")
+
                     model = get_gemini_model()
                     safety = get_safety_settings()
 
-                    # 5. Upload media to Gemini
-                    status.update(label="📤 Uploading media to Gemini...", state="running")
-                    audio_file_obj = None
-                    video_file_obj = None
-
-                    if url_link:
-                        audio_file_obj = upload_file_to_gemini(audio_path)
-                    else:
-                        ext = os.path.splitext(upload_file.name)[1].lower()
-                        if ext in [".mp4", ".mov", ".mkv"]:
-                            video_file_obj = upload_file_to_gemini("temp_video_upload.mp4")
-                        else:
-                            audio_file_obj = upload_file_to_gemini(audio_path)
-
-                    # 6. Plot summary
-                    status.update(label="📚 Generating plot summary...", state="running")
-
-                    plot_inputs = []
-                    if video_file_obj:
-                        plot_inputs.append(video_file_obj)
-                    if audio_file_obj:
-                        plot_inputs.append(audio_file_obj)
-
-                    plot_prompt = f"""
+                    summary_prompt = f"""
 CAST:
 {cast_info}
 
@@ -462,18 +485,17 @@ TASK:
 Write a clear plot summary of the scene.
 """
 
-                    if plot_inputs:
-                        plot_inputs.append(plot_prompt)
-                        plot_resp = model.generate_content(contents=plot_inputs, safety_settings=safety)
-                    else:
-                        plot_resp = model.generate_content(contents=plot_prompt, safety_settings=safety)
+                    summary_resp = model.generate_content(
+                        contents=summary_prompt,
+                        safety_settings=safety
+                    )
 
-                    st.session_state.plot_summary = plot_resp.text.strip()
+                    st.session_state.plot_summary = summary_resp.text.strip()
 
-                    # 7. Speaker tagging
+                    # 5. SPEAKER TAGGING
                     status.update(label="🎙️ Tagging speakers...", state="running")
 
-                    speaker_prompt = f"""
+                    tag_prompt = f"""
 CAST:
 {cast_info}
 
@@ -487,10 +509,14 @@ TASK:
 Rewrite transcript with speaker tags.
 """
 
-                    speaker_resp = model.generate_content(contents=speaker_prompt, safety_settings=safety)
-                    st.session_state.transcript_tagged = speaker_resp.text.strip()
+                    tag_resp = model.generate_content(
+                        contents=tag_prompt,
+                        safety_settings=safety
+                    )
 
-                    # 8. Chapter
+                    st.session_state.transcript_tagged = tag_resp.text.strip()
+
+                    # 6. NOVEL CHAPTER
                     status.update(label="📖 Writing YA-style POV chapter...", state="running")
 
                     focus_str = ", ".join(focus_characters)
@@ -509,7 +535,7 @@ FOCUS:
 {focus_str}
 
 NOTES:
-{live_notes}
+{desktop_notes}
 
 TAGGED TRANSCRIPT:
 \"\"\"{st.session_state.transcript_tagged}\"\"\"
@@ -518,53 +544,79 @@ TASK:
 Write a YA-style POV chapter (~2500 words).
 """
 
-                    novel_resp = model.generate_content(contents=novel_prompt, safety_settings=safety)
-                    st.session_state.chapter = novel_resp.text.strip()
+                    novel_resp = model.generate_content(
+                        contents=novel_prompt,
+                        safety_settings=safety
+                    )
 
+                    st.session_state.chapter = novel_resp.text.strip()
                     st.session_state.processed = True
-                    status.update(label="✅ Done!", state="complete")
+
+                    status.update(label="✅ Desktop pipeline complete!", state="complete")
                     clean_temp_files()
 
                 except Exception as e:
                     st.error(f"Error: {e}")
                     clean_temp_files()
-
-
-# ---------------- RESULTS (SHARED) ----------------
+# ---------------- RESULTS (SHARED FOR BOTH MODES) ----------------
 
 if st.session_state.processed:
     st.divider()
     col1, col2 = st.columns(2)
 
+    # -------- LEFT COLUMN --------
     with col1:
-        st.subheader("📚 Plot summary")
-        st.text_area("Summary", st.session_state.plot_summary, height=200)
+        st.subheader("📚 Plot Summary")
+        st.text_area(
+            "Summary",
+            st.session_state.plot_summary,
+            height=200
+        )
 
-        st.subheader("📜 Transcript (speaker-tagged)")
-        st.text_area("Transcript", st.session_state.transcript_tagged, height=300)
+        st.subheader("📜 Transcript (Speaker‑Tagged)")
+        st.text_area(
+            "Transcript",
+            st.session_state.transcript_tagged,
+            height=300
+        )
 
         st.download_button(
-            "📥 Download transcript (Word)",
+            "📥 Download Transcript (Word)",
             create_docx("Transcript", st.session_state.transcript_tagged),
             "Transcript.docx",
         )
 
+    # -------- RIGHT COLUMN --------
     with col2:
-        st.subheader(f"📖 Novel chapter – {pov_choice} POV")
-        st.text_area("Chapter", st.session_state.chapter, height=500)
+        st.subheader(f"📖 Novel Chapter — {pov_choice} POV")
+        st.text_area(
+            "Chapter",
+            st.session_state.chapter,
+            height=500
+        )
 
         st.download_button(
-            "📥 Download chapter (Word)",
+            "📥 Download Chapter (Word)",
             create_docx(f"{pov_choice} Chapter", st.session_state.chapter),
             "NovelChapter.docx",
         )
 
+        # If user uploaded a video in desktop mode, allow them to download it back
         if st.session_state.has_video_upload and os.path.exists("temp_video_upload.mp4"):
-            st.markdown("### 🎞️ Uploaded video")
+            st.markdown("### 🎞️ Uploaded Video")
             with open("temp_video_upload.mp4", "rb") as f:
                 st.download_button(
-                    "Download uploaded video (MP4)",
+                    "Download Uploaded Video (MP4)",
                     f,
                     file_name="uploaded_scene.mp4",
                     mime="video/mp4",
                 )
+# ---------------- FOOTER / CLEANUP ----------------
+
+st.markdown("---")
+st.markdown(
+    "Built with ❤️ using Streamlit, Whisper, yt‑dlp, and Gemini multimodal models."
+)
+
+# Final cleanup on rerun
+clean_temp_files()
