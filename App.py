@@ -1,18 +1,17 @@
 import streamlit as st
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import subprocess
 import os
 import time
 from io import BytesIO
 from docx import Document
 
-# ---------------- 1. SETUP ----------------
+# 1. SETUP
 st.set_page_config(page_title="Roman's POV Studio", layout="wide")
 
 api_key = st.secrets.get("GEMINI_API_KEY", "").strip()
 if not api_key:
-    st.error("🔑 API Key missing from Streamlit Secrets.")
+    st.error("🔑 API Key missing from Secrets.")
     st.stop()
 
 genai.configure(api_key=api_key)
@@ -29,15 +28,13 @@ def create_docx(title, content):
     doc.save(bio)
     return bio.getvalue()
 
-# ---------------- 2. SIDEBAR ----------------
+# 2. SIDEBAR
 with st.sidebar:
     st.header("🎭 Character Bible")
     cast_info = st.text_area("Cast List (name: role):", 
-        "Roman: Protagonist/Narrator\nGiada: Mother\nJustin: Father\nBillie: Sister\nTheresa: Grandmother", height=200)
+        "Roman: Protagonist\nGiada: Mother\nJustin: Father\nBillie: Sister", height=200)
     
     cast_names = [line.split(":")[0].strip() for line in cast_info.split("\n") if ":" in line]
-    
-    st.header("👤 POV Narrator")
     pov_choice = st.selectbox("Narrator:", ["Roman"] + [n for n in cast_names if n != "Roman"])
 
     st.header("🍪 Bypass Tools")
@@ -47,24 +44,22 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-# ---------------- 3. MAIN INPUT ----------------
+# 3. MAIN INPUT
 st.title("🎬 Cinematic POV Story Engine")
 tab_up, tab_url = st.tabs(["📁 Local Video Upload", "🌐 Streaming URL Sync"])
 
 with tab_up:
     file_vid = st.file_uploader("Upload MP4/MOV", type=["mp4", "mov"])
 with tab_url:
-    url_link = st.text_input("Paste Episode URL (DisneyNow, Disney+, YouTube):")
+    url_link = st.text_input("Paste Episode URL:")
 
-# ---------------- 4. PRODUCTION ENGINE ----------------
+# 4. PRODUCTION ENGINE
 if st.button("🚀 START PRODUCTION", use_container_width=True):
     with st.status(f"🎬 Processing via {pov_choice}...") as status:
         try:
-            # 4.1. Clean Workspace
             for f in genai.list_files(): genai.delete_file(f.name)
             source = "temp_video.mp4"
 
-            # 4.2. Get the Video
             if file_vid:
                 with open(source, "wb") as f: f.write(file_vid.getbuffer())
             elif url_link:
@@ -74,14 +69,13 @@ if st.button("🚀 START PRODUCTION", use_container_width=True):
                     ydl_cmd.extend(["--cookies", "cookies.txt"])
                 subprocess.run(ydl_cmd, check=True)
 
-            # 4.3. Upload to Gemini
-            status.update(label="📤 Uploading to AI for Visual Grounding...", state="running")
             gem_file = genai.upload_file(path=source)
             while gem_file.state.name == "PROCESSING":
                 time.sleep(3)
                 gem_file = genai.get_file(gem_file.name)
 
-            # 4.4. Fixed Safety Settings (No Civic Integrity)
+            # --- THE "INTEGRITY" FIX ---
+            # We use a simple list of strings which is more stable for the current API
             safety_settings = [
                 {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
                 {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -91,24 +85,12 @@ if st.button("🚀 START PRODUCTION", use_container_width=True):
 
             model = genai.GenerativeModel('gemini-1.5-flash')
             
-            # 4.5. Grounded Prompt
             prompt = f"""
             Identify characters via visual grounding. Narrator: {pov_choice}.
-            
-            CAST BIBLE:
-            {cast_info}
-            
-            TASK 1: VERBATIM TRANSCRIPT
-            - Differentiate Dialogue vs Voiceover (VO).
-            - Tag speakers accurately using visual appearance and voice.
-            
+            CAST BIBLE: {cast_info}
+            TASK 1: VERBATIM TRANSCRIPT (Tag speakers accurately).
             ---SPLIT---
-            
-            TASK 2: FIRST-PERSON NOVEL CHAPTER
-            - POV: {pov_choice}.
-            - Focus on internal monologue, sensory details, and feelings.
-            - AUTHENTICITY: If {pov_choice} is not in a scene, they must 'hear about it later'.
-            - Length: ~2500 words, YA Novel style.
+            TASK 2: 2500-WORD NOVEL CHAPTER from POV of {pov_choice}.
             """
             
             response = model.generate_content([gem_file, prompt], safety_settings=safety_settings)
@@ -122,7 +104,7 @@ if st.button("🚀 START PRODUCTION", use_container_width=True):
         except Exception as e:
             st.error(f"Studio Error: {e}")
 
-# ---------------- 5. RESULTS HUB ----------------
+# 5. RESULTS HUB
 if st.session_state.transcript or st.session_state.chapter:
     st.divider()
     col1, col2 = st.columns(2)
