@@ -147,158 +147,311 @@ with st.sidebar:
         options=cast_names,
         default=cast_names,
     )
-# ---------------- MAIN UI ----------------
+
+    st.header("🌐 URL cookies (desktop mode)")
+    cookie_file = st.file_uploader("cookies.txt (required for DisneyNow)", type=["txt"])
+
+    st.divider()
+    if st.button("🗑️ Reset project"):
+        for key in ["transcript_raw", "plot_summary", "transcript_tagged", "chapter", "processed", "has_video_upload"]:
+            st.session_state[key] = "" if key not in ["processed", "has_video_upload"] else False
+        clean_temp_files()
+        st.rerun()
+
+
+# ---------------- MODE TOGGLE ----------------
 
 st.title("🎬 Cinematic POV Story Engine")
 
+mode = st.radio("Mode", ["Mobile (light)", "Desktop (full)"])
+
 st.markdown(
     """
-This app turns real scenes into a **YA-style POV novel chapter** using:
-
-- **Whisper medium** for stable transcription  
-- **Gemini** to listen, read, and (for uploads) watch video  
+- **Mobile (light)**: audio upload only, Gemini does transcription + story (no yt-dlp, no Whisper, no video).  
+- **Desktop (full)**: URL + upload + downloader, Whisper-medium, yt-dlp, Gemini can watch uploaded MP4s.  
 """
 )
 
-tab_url, tab_upload, tab_notes, tab_downloader = st.tabs(
-    ["🌐 URL (audio-only)", "📁 Upload (MP4 or audio)", "📝 Writer notes", "⬇️ Download URL video only"]
-)
 
-with tab_url:
-    url_link = st.text_input("Paste streaming URL (DisneyNow, Disney+, YouTube, etc.):")
+# ---------------- MOBILE (LIGHT) MODE ----------------
 
-with tab_upload:
-    upload_file = st.file_uploader(
-        "Upload MP4 video or audio file",
-        type=["mp4", "mov", "mkv", "mp3", "wav", "m4a", "aac"],
+if mode == "Mobile (light)":
+    st.subheader("📱 Mobile mode – audio only, Gemini does everything")
+
+    mobile_audio = st.file_uploader(
+        "Upload a short audio clip (MP3 / M4A / WAV, ideally < 10–15 minutes)",
+        type=["mp3", "m4a", "wav", "aac"],
     )
 
-with tab_notes:
     live_notes = st.text_area(
         "Director / writer notes (optional):",
         placeholder="Tone, themes, what to emphasise in the chapter...",
         height=150,
     )
 
-with tab_downloader:
-    st.subheader("Download streaming video to a file (no AI, just save it)")
-    dl_url = st.text_input("Streaming URL", key="dl_url")
-    dl_cookies = st.file_uploader("cookies.txt (required for many sites)", type=["txt"], key="dl_cookies")
-
-    if st.button("🎞️ Download video file", key="dl_button"):
-        if not dl_url:
-            st.error("Please enter a URL.")
+    if st.button("🚀 Run mobile pipeline", use_container_width=True):
+        if not mobile_audio:
+            st.error("Please upload an audio file.")
         else:
-            try:
-                if dl_cookies:
-                    with open("cookies.txt", "wb") as f:
-                        f.write(dl_cookies.getbuffer())
-                    cookies_args = ["--cookies", "cookies.txt"]
-                else:
-                    cookies_args = []
+            with st.status("Running mobile pipeline with Gemini only...", expanded=True) as status:
+                try:
+                    clean_temp_files()
 
-                out_path = "downloaded_url_video.mp4"
-                if os.path.exists(out_path):
-                    os.remove(out_path)
+                    # Save audio
+                    audio_path = "temp_audio_source"
+                    with open(audio_path, "wb") as f:
+                        f.write(mobile_audio.getbuffer())
 
-                cmd = [
-                    "yt-dlp",
-                    "-f",
-                    "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
-                    "-o",
-                    out_path,
-                ] + cookies_args + [dl_url]
-
-                with st.spinner("Downloading with yt-dlp..."):
-                    subprocess.run(cmd, check=True)
-
-                if os.path.exists(out_path):
-                    st.success("Download complete. Save the file below.")
-                    with open(out_path, "rb") as f:
-                        st.download_button(
-                            "📥 Save video file (MP4)",
-                            f,
-                            file_name="downloaded_video.mp4",
-                            mime="video/mp4",
-                        )
-                else:
-                    st.error("Download finished but file not found.")
-
-            except Exception as e:
-                st.error(f"Error: {e}")
-
-
-# ---------------- PIPELINE ----------------
-
-if st.button("🚀 Run full pipeline", use_container_width=True):
-    if not url_link and not upload_file:
-        st.error("Please provide a URL or upload a file.")
-    else:
-        with st.status("Running pipeline...", expanded=True) as status:
-            try:
-                clean_temp_files()
-                st.session_state.has_video_upload = False
-
-                # 1. Get audio (URL mode = audio only)
-                status.update(label="⬇️ Getting media...", state="running")
-
-                if url_link:
-                    if "disneynow.com" in url_link.lower() and not cookie_file:
-                        st.error("DisneyNow URLs require cookies.txt.")
-                        st.stop()
-                    audio_source_path = download_audio_from_url(url_link, cookie_file)
-
-                else:
-                    # Upload mode
-                    ext = os.path.splitext(upload_file.name)[1].lower()
-                    if ext in [".mp4", ".mov", ".mkv"]:
-                        video_path = "temp_video_upload.mp4"
-                        with open(video_path, "wb") as f:
-                            f.write(upload_file.getbuffer())
-                        st.session_state.has_video_upload = True
-                        audio_source_path = video_path
-                    else:
-                        audio_source_path = "temp_audio_source"
-                        with open(audio_source_path, "wb") as f:
-                            f.write(upload_file.getbuffer())
-
-                # 2. Extract audio
-                status.update(label="🎧 Extracting audio...", state="running")
-                audio_path = extract_audio(audio_source_path)
-
-                # 3. Whisper transcription
-                status.update(label="📝 Transcribing with Whisper medium...", state="running")
-                transcript_raw = whisper_transcribe(audio_path)
-                st.session_state.transcript_raw = transcript_raw
-
-                # 4. Gemini model
-                model = get_gemini_model()
-                safety = get_safety_settings()
-
-                # 5. Upload media to Gemini
-                status.update(label="📤 Uploading media to Gemini...", state="running")
-                audio_file_obj = None
-                video_file_obj = None
-
-                if url_link:
+                    status.update(label="📤 Uploading audio to Gemini...", state="running")
+                    model = get_gemini_model()
+                    safety = get_safety_settings()
                     audio_file_obj = upload_file_to_gemini(audio_path)
-                else:
-                    ext = os.path.splitext(upload_file.name)[1].lower()
-                    if ext in [".mp4", ".mov", ".mkv"]:
-                        video_file_obj = upload_file_to_gemini("temp_video_upload.mp4")
+
+                    # 1. Gemini: transcribe + summary
+                    status.update(label="📝 Gemini transcribing + summarising...", state="running")
+
+                    transcribe_prompt = f"""
+You are a careful transcriber and story analyst.
+
+CAST (name: role):
+{cast_info}
+
+TASK:
+1. First, transcribe the audio as accurately as possible.
+2. Then, write a clear plot summary of what happens.
+3. Then, rewrite the transcript with speaker tags using the cast list when possible.
+
+Return your answer in three sections with clear headings:
+[TRANSCRIPT]
+[SUMMARY]
+[TAGGED_TRANSCRIPT]
+"""
+
+                    contents = [audio_file_obj, transcribe_prompt] if audio_file_obj else [transcribe_prompt]
+                    resp = model.generate_content(contents=contents, safety_settings=safety)
+                    full_text = (resp.text or "").strip()
+
+                    # Very simple splitting by headings
+                    transcript_raw = ""
+                    plot_summary = ""
+                    transcript_tagged = ""
+
+                    current = None
+                    for line in full_text.splitlines():
+                        l = line.strip()
+                        if l.upper().startswith("[TRANSCRIPT"):
+                            current = "t"
+                            continue
+                        if l.upper().startswith("[SUMMARY"):
+                            current = "s"
+                            continue
+                        if l.upper().startswith("[TAGGED_TRANSCRIPT"):
+                            current = "tt"
+                            continue
+                        if current == "t":
+                            transcript_raw += line + "\n"
+                        elif current == "s":
+                            plot_summary += line + "\n"
+                        elif current == "tt":
+                            transcript_tagged += line + "\n"
+
+                    st.session_state.transcript_raw = transcript_raw.strip()
+                    st.session_state.plot_summary = plot_summary.strip()
+                    st.session_state.transcript_tagged = transcript_tagged.strip() or transcript_raw.strip()
+
+                    # 2. Gemini: chapter
+                    status.update(label="📖 Gemini writing YA-style POV chapter...", state="running")
+
+                    focus_str = ", ".join(focus_characters) if focus_characters else "all characters"
+
+                    novel_prompt = f"""
+You are a skilled YA novelist.
+
+CAST (name: role):
+{cast_info}
+
+PLOT SUMMARY:
+\"\"\"{st.session_state.plot_summary}\"\"\"
+
+PRIMARY NARRATOR POV:
+{pov_choice}
+
+FOCUS CHARACTERS:
+{focus_str}
+
+DIRECTOR / WRITER NOTES:
+{live_notes}
+
+SOURCE TRANSCRIPT (each line tagged with speaker if available):
+\"\"\"{st.session_state.transcript_tagged}\"\"\"
+
+TASK:
+Using the tagged transcript and plot summary as the backbone, write a ~2500-word YA-style novel chapter.
+
+REQUIREMENTS:
+- First-person POV from {pov_choice}.
+- Show rich internal thoughts, emotions, and reactions of {pov_choice}.
+- Use the speaker tags to keep who-said-what consistent with the transcript.
+- Include interactions and dialogue with the other characters, especially: {focus_str}.
+- Keep the tone grounded, emotional, and character-driven, like a young adult contemporary / drama.
+- Preserve the key events and emotional beats from the plot summary and transcript, but you may add internal monologue, sensory detail, and subtle expansions.
+- Make Giada explicitly the mother if she appears.
+- Do NOT include analysis, explanation, or meta-commentary. Output ONLY the story text.
+"""
+
+                    novel_resp = model.generate_content(contents=novel_prompt, safety_settings=safety)
+                    chapter_text = (novel_resp.text or "").strip()
+                    st.session_state.chapter = chapter_text
+                    st.session_state.processed = True
+
+                    status.update(label="✅ Done! Results below.", state="complete")
+                    clean_temp_files()
+
+                except Exception as e:
+                    st.error(f"Error: {e}")
+                    clean_temp_files()
+
+# ---------------- DESKTOP (FULL) MODE ----------------
+
+else:
+    st.subheader("💻 Desktop mode – full pipeline (URL + upload + Whisper + yt-dlp)")
+
+    tab_url, tab_upload, tab_notes, tab_downloader = st.tabs(
+        ["🌐 URL (audio-only)", "📁 Upload (MP4 or audio)", "📝 Writer notes", "⬇️ Download URL video only"]
+    )
+
+    with tab_url:
+        url_link = st.text_input("Paste streaming URL (DisneyNow, Disney+, YouTube, etc.):")
+
+    with tab_upload:
+        upload_file = st.file_uploader(
+            "Upload MP4 video or audio file",
+            type=["mp4", "mov", "mkv", "mp3", "wav", "m4a", "aac"],
+        )
+
+    with tab_notes:
+        live_notes = st.text_area(
+            "Director / writer notes (optional):",
+            placeholder="Tone, themes, what to emphasise in the chapter...",
+            height=150,
+        )
+
+    with tab_downloader:
+        st.subheader("Download streaming video to a file (no AI, just save it)")
+        dl_url = st.text_input("Streaming URL", key="dl_url")
+        dl_cookies = st.file_uploader("cookies.txt (required for many sites)", type=["txt"], key="dl_cookies")
+
+        if st.button("🎞️ Download video file", key="dl_button"):
+            if not dl_url:
+                st.error("Please enter a URL.")
+            else:
+                try:
+                    if dl_cookies:
+                        with open("cookies.txt", "wb") as f:
+                            f.write(dl_cookies.getbuffer())
+                        cookies_args = ["--cookies", "cookies.txt"]
                     else:
+                        cookies_args = []
+
+                    out_path = "downloaded_url_video.mp4"
+                    if os.path.exists(out_path):
+                        os.remove(out_path)
+
+                    cmd = [
+                        "yt-dlp",
+                        "-f",
+                        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
+                        "-o",
+                        out_path,
+                    ] + cookies_args + [dl_url]
+
+                    with st.spinner("Downloading with yt-dlp..."):
+                        subprocess.run(cmd, check=True)
+
+                    if os.path.exists(out_path):
+                        st.success("Download complete. Save the file below.")
+                        with open(out_path, "rb") as f:
+                            st.download_button(
+                                "📥 Save video file (MP4)",
+                                f,
+                                file_name="downloaded_video.mp4",
+                                mime="video/mp4",
+                            )
+                    else:
+                        st.error("Download finished but file not found.")
+
+                except Exception as e:
+                    st.error(f"Error: {e}")
+
+    if st.button("🚀 Run desktop pipeline", use_container_width=True):
+        if not url_link and not upload_file:
+            st.error("Please provide a URL or upload a file.")
+        else:
+            with st.status("Running desktop pipeline...", expanded=True) as status:
+                try:
+                    clean_temp_files()
+                    st.session_state.has_video_upload = False
+
+                    # 1. Get audio (URL mode = audio only)
+                    status.update(label="⬇️ Getting media...", state="running")
+
+                    if url_link:
+                        if "disneynow.com" in url_link.lower() and not cookie_file:
+                            st.error("DisneyNow URLs require cookies.txt.")
+                            st.stop()
+                        audio_source_path = download_audio_from_url(url_link, cookie_file)
+
+                    else:
+                        # Upload mode
+                        ext = os.path.splitext(upload_file.name)[1].lower()
+                        if ext in [".mp4", ".mov", ".mkv"]:
+                            video_path = "temp_video_upload.mp4"
+                            with open(video_path, "wb") as f:
+                                f.write(upload_file.getbuffer())
+                            st.session_state.has_video_upload = True
+                            audio_source_path = video_path
+                        else:
+                            audio_source_path = "temp_audio_source"
+                            with open(audio_source_path, "wb") as f:
+                                f.write(upload_file.getbuffer())
+
+                    # 2. Extract audio
+                    status.update(label="🎧 Extracting audio...", state="running")
+                    audio_path = extract_audio(audio_source_path)
+
+                    # 3. Whisper transcription
+                    status.update(label="📝 Transcribing with Whisper medium...", state="running")
+                    transcript_raw = whisper_transcribe(audio_path)
+                    st.session_state.transcript_raw = transcript_raw
+
+                    # 4. Gemini model
+                    model = get_gemini_model()
+                    safety = get_safety_settings()
+
+                    # 5. Upload media to Gemini
+                    status.update(label="📤 Uploading media to Gemini...", state="running")
+                    audio_file_obj = None
+                    video_file_obj = None
+
+                    if url_link:
                         audio_file_obj = upload_file_to_gemini(audio_path)
+                    else:
+                        ext = os.path.splitext(upload_file.name)[1].lower()
+                        if ext in [".mp4", ".mov", ".mkv"]:
+                            video_file_obj = upload_file_to_gemini("temp_video_upload.mp4")
+                        else:
+                            audio_file_obj = upload_file_to_gemini(audio_path)
 
-                # 6. Plot summary
-                status.update(label="📚 Generating plot summary...", state="running")
+                    # 6. Plot summary
+                    status.update(label="📚 Generating plot summary...", state="running")
 
-                plot_inputs = []
-                if video_file_obj:
-                    plot_inputs.append(video_file_obj)
-                if audio_file_obj:
-                    plot_inputs.append(audio_file_obj)
+                    plot_inputs = []
+                    if video_file_obj:
+                        plot_inputs.append(video_file_obj)
+                    if audio_file_obj:
+                        plot_inputs.append(audio_file_obj)
 
-                plot_prompt = f"""
+                    plot_prompt = f"""
 CAST:
 {cast_info}
 
@@ -309,18 +462,18 @@ TASK:
 Write a clear plot summary of the scene.
 """
 
-                if plot_inputs:
-                    plot_inputs.append(plot_prompt)
-                    plot_resp = model.generate_content(contents=plot_inputs, safety_settings=safety)
-                else:
-                    plot_resp = model.generate_content(contents=plot_prompt, safety_settings=safety)
+                    if plot_inputs:
+                        plot_inputs.append(plot_prompt)
+                        plot_resp = model.generate_content(contents=plot_inputs, safety_settings=safety)
+                    else:
+                        plot_resp = model.generate_content(contents=plot_prompt, safety_settings=safety)
 
-                st.session_state.plot_summary = plot_resp.text.strip()
+                    st.session_state.plot_summary = plot_resp.text.strip()
 
-                # 7. Speaker tagging
-                status.update(label="🎙️ Tagging speakers...", state="running")
+                    # 7. Speaker tagging
+                    status.update(label="🎙️ Tagging speakers...", state="running")
 
-                speaker_prompt = f"""
+                    speaker_prompt = f"""
 CAST:
 {cast_info}
 
@@ -334,15 +487,15 @@ TASK:
 Rewrite transcript with speaker tags.
 """
 
-                speaker_resp = model.generate_content(contents=speaker_prompt, safety_settings=safety)
-                st.session_state.transcript_tagged = speaker_resp.text.strip()
+                    speaker_resp = model.generate_content(contents=speaker_prompt, safety_settings=safety)
+                    st.session_state.transcript_tagged = speaker_resp.text.strip()
 
-                # 8. Chapter
-                status.update(label="📖 Writing YA-style POV chapter...", state="running")
+                    # 8. Chapter
+                    status.update(label="📖 Writing YA-style POV chapter...", state="running")
 
-                focus_str = ", ".join(focus_characters)
+                    focus_str = ", ".join(focus_characters)
 
-                novel_prompt = f"""
+                    novel_prompt = f"""
 CAST:
 {cast_info}
 
@@ -365,27 +518,19 @@ TASK:
 Write a YA-style POV chapter (~2500 words).
 """
 
-                novel_resp = model.generate_content(contents=novel_prompt, safety_settings=safety)
-                st.session_state.chapter = novel_resp.text.strip()
+                    novel_resp = model.generate_content(contents=novel_prompt, safety_settings=safety)
+                    st.session_state.chapter = novel_resp.text.strip()
 
-                st.session_state.processed = True
-                status.update(label="✅ Done!", state="complete")
-                st.rerun()
+                    st.session_state.processed = True
+                    status.update(label="✅ Done!", state="complete")
+                    clean_temp_files()
 
-            except Exception as e:
-                st.error(f"Error: {e}")
-                clean_temp_files()
+                except Exception as e:
+                    st.error(f"Error: {e}")
+                    clean_temp_files()
 
-    st.header("🌐 URL cookies")
-    cookie_file = st.file_uploader("cookies.txt (required for DisneyNow)", type=["txt"])
 
-    st.divider()
-    if st.button("🗑️ Reset project"):
-        for key in ["transcript_raw", "plot_summary", "transcript_tagged", "chapter", "processed", "has_video_upload"]:
-            st.session_state[key] = "" if key not in ["processed", "has_video_upload"] else False
-        clean_temp_files()
-        st.rerun()
-# ---------------- RESULTS ----------------
+# ---------------- RESULTS (SHARED) ----------------
 
 if st.session_state.processed:
     st.divider()
