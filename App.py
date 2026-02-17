@@ -5,118 +5,121 @@ import os
 import time
 from datetime import datetime
 
-# ------------------- 1. CONFIGURATION & PERSISTENCE -------------------
-st.set_page_config(page_title="POV Cinema Studio", layout="wide")
+# ------------------- 1. CONFIG & SESSION STATE -------------------
+st.set_page_config(page_title="POV Cinema Studio", layout="wide", page_icon="🎬")
 
-# Initialize session state so we don't lose files on refresh
+# Initialize session state so we don't lose data on refresh
 if "recorded_files" not in st.session_state:
     st.session_state.recorded_files = []
 
-# AI Setup
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 if api_key:
     genai.configure(api_key=api_key)
+else:
+    st.error("🔑 Error: Missing GEMINI_API_KEY in Streamlit Secrets!")
 
-# ------------------- 2. THE DVR ENGINE -------------------
-def start_background_recording(url):
-    """Downloads video in the background so you don't have to watch"""
+# ------------------- 2. THE DVR ENGINE (BACKGROUND) -------------------
+def start_dvr(url, pov_name):
     timestamp = datetime.now().strftime("%H%M%S")
     filename = f"rec_{timestamp}.mp4"
-    # Speed through recording by grabbing stream directly
+    log_file = f"log_{filename}.txt"
+    
+    # We use Popen so the app keeps running while the video downloads
     cmd = ["yt-dlp", "-f", "best[ext=mp4]", "--no-playlist", "-o", filename, url]
-    subprocess.Popen(cmd) 
-    return filename
+    
+    with open(log_file, "w") as f:
+        subprocess.Popen(cmd, stdout=f, stderr=f)
+    
+    return filename, log_file
 
 # ------------------- 3. MAIN INTERFACE -------------------
-st.title("🎬 POV Cloud DVR & Writing Engine")
+st.title("☁️ POV Cloud DVR & Writing Engine")
 
 tab_queue, tab_library = st.tabs(["📥 Add to Queue", "📚 Library & Results"])
 
+# --- TAB 1: QUEUE ---
 with tab_queue:
-    st.info("Pasting a link here will 'Queue' the video. You don't have to watch it play!")
+    st.info("Pasting a link here starts a background 'Cloud Recording'. You can close the app and return later.")
     video_url = st.text_input("Paste DisneyNow / YouTube URL:")
-    pov_choice = st.selectbox("Narrator POV:", ["Roman", "Billie", "Justin"])
+    pov_choice = st.selectbox("Narrator POV:", ["Roman", "Billie", "Justin", "Milo"])
     
     if st.button("🔴 Start Background Recording"):
         if video_url:
-            filename = start_background_recording(video_url)
-            # Add to our library list
+            fn, log = start_dvr(video_url, pov_choice)
             st.session_state.recorded_files.append({
-                "file": filename, 
-                "pov": pov_choice, 
-                "status": "Recording..."
+                "file": fn, 
+                "log": log, 
+                "pov": pov_choice,
+                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M")
             })
-            st.success(f"✅ Queued: {filename}. You can close the app or go to the Library tab now.")
+            st.success(f"Successfully Queued: {fn}")
+            st.toast("Recording started in background!")
         else:
-            st.error("Please paste a link first.")
+            st.error("Please paste a link first!")
 
+# --- TAB 2: LIBRARY ---
 with tab_library:
-    st.subheader("Process & Test Recordings")
-    
-    # Manual Upload Section for existing files
-    with st.expander("📂 Have a file already? Manual Upload"):
-        manual_file = st.file_uploader("Upload MP4/WebM", type=["mp4", "webm"])
-        if manual_file:
-            with open(manual_file.name, "wb") as f:
-                f.write(manual_file.getbuffer())
-            if st.button("➕ Add Upload to Library"):
-                st.session_state.recorded_files.append({
-                    "file": manual_file.name, 
-                    "pov": "Custom", 
-                    "status": "Ready"
-                })
+    # Manual Refresh button to check for finished files
+    if st.button("🔄 Check for Finished Recordings"):
+        st.rerun()
 
-    st.divider()
-
-    # Display the Library List
     if not st.session_state.recorded_files:
-        st.write("No recordings found yet.")
+        st.write("No recordings in queue. Go to 'Add to Queue' to start.")
     else:
         for idx, item in enumerate(st.session_state.recorded_files):
             file_name = item['file']
+            log_name = item['log']
             
-            # Check if file exists on disk yet
-            if os.path.exists(file_name):
-                with st.container():
-                    col_info, col_play, col_write = st.columns([2, 1, 1])
-                    
-                    with col_info:
-                        st.write(f"🎥 **{file_name}** (POV: {item['pov']})")
-                    
+            with st.container(border=True):
+                col_info, col_play, col_write = st.columns([2, 1, 1])
+                
+                with col_info:
+                    st.write(f"🎥 **{file_name}**")
+                    st.caption(f"POV: {item['pov']} | Added: {item['created_at']}")
+                
+                # Check if file exists (it's finished downloading)
+                if os.path.exists(file_name) and os.path.getsize(file_name) > 0:
                     with col_play:
-                        # Test if video was recorded correctly
                         if st.button("📺 Play Test", key=f"play_{idx}"):
                             st.video(file_name)
                     
                     with col_write:
-                        # Run the AI Production
-                        if st.button("✨ Write Novel", key=f"write_{idx}"):
-                            with st.status("AI Analyzing Video...") as status:
+                        if st.button("✍️ Write Story", key=f"write_{idx}"):
+                            with st.status("AI is analyzing the footage...", expanded=True) as status:
                                 # 1. Upload to Gemini
-                                gen_file = genai.upload_file(file_name)
-                                while gen_file.state.name == "PROCESSING":
+                                status.write("Uploading video to Google AI...")
+                                video_file = genai.upload_file(file_name)
+                                while video_file.state.name == "PROCESSING":
                                     time.sleep(2)
-                                    gen_file = genai.get_file(gen_file.name)
+                                    video_file = genai.get_file(video_file.name)
                                 
                                 # 2. Generate
+                                status.write("Generating Transcript and Novel Chapter...")
                                 model = genai.GenerativeModel('gemini-1.5-pro')
-                                prompt = f"""
-                                Identify speakers based on visual cues.
-                                TASK 1: Full Transcript.
-                                TASK 2: Deep Novel Chapter from {item['pov']}'s POV.
-                                Split with: ---SPLIT---
-                                """
-                                resp = model.generate_content([gen_file, prompt])
+                                prompt = f"POV: {item['pov']}. 1: Full Transcript. 2: Novel Chapter. Split with ---SPLIT---"
+                                response = model.generate_content([video_file, prompt])
                                 
-                                # 3. Parse and Display in separate boxes
-                                if "---SPLIT---" in resp.text:
-                                    parts = resp.text.split("---SPLIT---")
-                                    st.subheader("📜 Transcript (T-Box)")
-                                    st.text_area("Transcript", parts[0], height=250)
-                                    st.subheader("📖 Novel (N-Box)")
-                                    st.text_area("Novel", parts[1], height=400)
-                                else:
-                                    st.write(resp.text)
-            else:
-                st.write(f"⏳ {file_name} is still downloading/recording...")
+                                # 3. Split and Store
+                                parts = response.text.split("---SPLIT---")
+                                st.session_state[f"res_{idx}"] = parts
+                                status.update(label="✅ Finished!", state="complete")
 
+                    # Show Results if they exist for this file
+                    if f"res_{idx}" in st.session_state:
+                        res = st.session_state[f"res_{idx}"]
+                        st.divider()
+                        res_col1, res_col2 = st.columns(2)
+                        with res_col1:
+                            st.subheader("📜 Transcript (T-Box)")
+                            st.text_area("Transcript", res[0], height=300, key=f"t_{idx}")
+                        with res_col2:
+                            st.subheader(f"📖 {item['pov']}'s Chapter (N-Box)")
+                            st.text_area("Novel", res[1] if len(res)>1 else "", height=300, key=f"n_{idx}")
+                
+                else:
+                    # Show progress from the log file
+                    st.warning("⏳ Still Downloading...")
+                    if os.path.exists(log_name):
+                        with st.expander("View Recording Logs"):
+                            with open(log_name, "r") as f:
+                                st.code(f.read()[-500:], language="text") # Show last 500 chars
