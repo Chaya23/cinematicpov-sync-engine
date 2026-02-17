@@ -34,9 +34,8 @@ def create_docx(title, content):
 with st.sidebar:
     st.header("🎭 Character Bible")
     cast_info = st.text_area("Cast List (name: role):", 
-        "Roman: Protagonist/Narrator\nGiada: Mother\nJustin: Father\nBillie: Sister\nTheresa: Grandmother", height=200)
+        "Roman: Protagonist/Narrator\nGiada: Mother\nJustin: Father\nBillie: Sister\nTheresa: Grandmother\nWinter: Best Friend", height=200)
     
-    # Dynamic POV Selection
     cast_names = [line.split(":")[0].strip() for line in cast_info.split("\n") if ":" in line]
     pov_choice = st.selectbox("Narrator POV:", ["Roman"] + [n for n in cast_names if n != "Roman"])
 
@@ -50,6 +49,7 @@ with st.sidebar:
 
 # ---------------- 3. MAIN INTERFACE ----------------
 st.title("🎬 Cinematic POV Story Engine")
+st.caption("Now powered by Gemini 3 Flash")
 
 tab_up, tab_url = st.tabs(["📁 Local Video Upload", "🌐 Streaming URL Sync"])
 
@@ -61,19 +61,13 @@ with tab_url:
 # ---------------- 4. PRODUCTION ENGINE ----------------
 if st.button("🚀 START PRODUCTION", use_container_width=True):
     with st.status(f"🎬 Grounding through {pov_choice}'s eyes...") as status:
+        source = "temp_video.mp4"
         try:
-            # Cleanup old files
-            for f in genai.list_files():
-                try: genai.delete_file(f.name)
-                except: pass
-            
-            source = "temp_video.mp4"
-
             # 4.1. Extraction Logic
             if file_vid:
                 with open(source, "wb") as f: f.write(file_vid.getbuffer())
             elif url_link:
-                status.update(label="⬇️ Downloading from URL...", state="running")
+                status.update(label="⬇️ Downloading via yt-dlp...", state="running")
                 ydl_cmd = ["yt-dlp", "-f", "best[ext=mp4]", "--geo-bypass", "-o", source]
                 if cookie_file:
                     with open("cookies.txt", "wb") as f: f.write(cookie_file.getbuffer())
@@ -81,42 +75,46 @@ if st.button("🚀 START PRODUCTION", use_container_width=True):
                 subprocess.run(ydl_cmd, check=True)
 
             # 4.2. Gemini Upload
-            status.update(label="📤 Uploading to AI for Visual Grounding...", state="running")
+            status.update(label="📤 Uploading for Visual Grounding...", state="running")
             gem_file = genai.upload_file(path=source)
             while gem_file.state.name == "PROCESSING":
                 time.sleep(3)
                 gem_file = genai.get_file(gem_file.name)
 
-            # 4.3. Model & Safety Fix (Removed Civic Integrity & 404 Fixed)
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            # 4.3. Gemini 3 Model & Safety Logic (FIXED)
+            # Using 'gemini-3-flash' to solve the 404 error
+            model = genai.GenerativeModel('gemini-3-flash')
             
-            safety_settings = [
-                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-            ]
+            # Updated safety categories for 2026 API
+            safety_settings = {
+                "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
+                "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
+                "HARM_CATEGORY_SEXUAL": "BLOCK_NONE",
+                "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+            }
 
-            # 4.4. The Grounded Prompt
+            # 4.4. The POV-Focused Prompt
             prompt = f"""
-            Identify characters via visual grounding. Narrator: {pov_choice}.
+            Using visual grounding from the video, perform two tasks.
+            NARRATOR POV: {pov_choice}
             CAST BIBLE: {cast_info}
 
             TASK 1: VERBATIM TRANSCRIPT
+            - High-fidelity dialogue capture.
             - Differentiate Dialogue vs Voiceover (VO).
-            - Tag speakers accurately based on visual appearance and voice.
+            - Tag speakers accurately.
             
             ---SPLIT---
 
             TASK 2: FIRST-PERSON NOVEL CHAPTER
-            - Narrator: {pov_choice}.
-            - Focus on internal thoughts, sensory details, and personal feelings.
-            - If {pov_choice} is not in a scene, they must 'hear about it later'.
-            - Length: ~2500 words, YA style.
+            - Style: Young Adult Fiction.
+            - Perspective: {pov_choice}'s internal monologue.
+            - Special Instruction: If {pov_choice} is Roman, emphasize his 'Pillow Armor' mentality—the feeling of being bullied, ignored by adults (Justin), and the stress of the 'Russo Curse'. 
+            - Focus on sensory details: the smell of the sub shop, the weight of the wand, the fear of magic going wrong.
             """
 
             # 4.5. Generation
-            status.update(label="🧠 Writing Transcript & Chapter...", state="running")
+            status.update(label="🧠 Analyzing and Writing...", state="running")
             response = model.generate_content([gem_file, prompt], safety_settings=safety_settings)
 
             if response.text:
@@ -127,6 +125,9 @@ if st.button("🚀 START PRODUCTION", use_container_width=True):
 
         except Exception as e:
             st.error(f"Studio Error: {e}")
+        finally:
+            if os.path.exists(source): os.remove(source)
+            if os.path.exists("cookies.txt"): os.remove("cookies.txt")
 
 # ---------------- 5. RESULTS & EXPORTS ----------------
 if st.session_state.transcript or st.session_state.chapter:
