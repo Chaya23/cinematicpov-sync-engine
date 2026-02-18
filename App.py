@@ -9,19 +9,18 @@ from datetime import datetime
 from docx import Document
 from io import BytesIO
 
-# --- 1. CORE SETUP ---
-st.set_page_config(page_title="Cinematic POV Sync v2026", layout="wide")
+# --- 1. SETUP ---
+st.set_page_config(page_title="POV Studio 2026", layout="wide", page_icon="🎬")
 MODEL_ID = "gemini-3-pro-preview"
 
-# Initialize Session State
 if "library" not in st.session_state:
     st.session_state.library = []
 
-# API Client
+# Initialize Client
 api_key = st.secrets.get("GEMINI_API_KEY", "")
 client = genai.Client(api_key=api_key) if api_key else None
 
-# --- 2. WORD EXPORT UTILITY ---
+# --- 2. DOCX EXPORT ---
 def create_docx(text, title):
     doc = Document()
     doc.add_heading(title, 0)
@@ -31,34 +30,33 @@ def create_docx(text, title):
     buf.seek(0)
     return buf
 
-# --- 3. SIDEBAR: THE AUTOMATIC POV SYNC ---
+# --- 3. SIDEBAR: SMART CAST & POV ---
 with st.sidebar:
     st.header("🎬 Studio Setup")
     show_name = st.text_input("Show Title:", "Wizards Beyond Waverly Place")
     
-    # CAST LIST: The Master Source
+    # EDITABLE CAST LIST
     cast_input = st.text_area(
-        "Edit Cast (Name: Role):", 
-        "Roman: Wizard\nBillie: Lead\nGiada: Mom\nJustin: Dad",
+        "Edit Cast List (Name: Role):", 
+        "Roman: Wizard Son\nBillie: Lead\nGiada: Mom\nJustin: Dad",
         height=150
     )
     
-    # ⚡ SMART POV SELECTOR: 
-    # This automatically scans your Cast List for names every time you type.
-    found_names = [n.strip() for n in re.findall(r'^([^:]+):', cast_input, flags=re.MULTILINE)]
-    if not found_names: found_names = ["Unknown"]
+    # DYNAMIC POV SELECTOR
+    # This regex finds names before the colon to update the dropdown instantly
+    names = [n.strip() for n in re.findall(r'^([^:]+):', cast_input, flags=re.MULTILINE)]
+    if not names: names = ["Default"]
     
-    pov_hero = st.selectbox("Narrator POV:", found_names)
+    pov_hero = st.selectbox("Select Narrator POV:", options=names)
     
     st.divider()
-    st.info("🦊 Tip: Export your Disney+ cookies from Firefox for the best DVR results.")
+    st.info("🦊 Best with Firefox cookies for Disney+")
     c_file = st.file_uploader("Upload cookies.txt", type="txt")
 
-# --- 4. VIDEO INPUTS: URL OR UPLOAD ---
-st.title(f"🎬 {show_name} Production")
+# --- 4. PRODUCTION INPUTS ---
+st.title(f"🎬 {show_name} Production Studio")
 
-# Create two tabs: one for live recording, one for pre-recorded files
-tab1, tab2 = st.tabs(["🚀 Record Disney+ Link", "📂 Upload Recorded Video"])
+tab1, tab2 = st.tabs(["🔗 Record from URL", "📂 Upload Local Video"])
 
 with tab1:
     link = st.text_input("Video URL:")
@@ -75,81 +73,86 @@ with tab1:
             st.rerun()
 
 with tab2:
-    uploaded_file = st.file_uploader("Select a video from your device:", type=["mp4", "mkv", "mov"])
-    if st.button("⬆️ Process Uploaded Video") and uploaded_file:
-        fn = f"local_{uploaded_file.name}"
+    local_file = st.file_uploader("Select video file:", type=["mp4", "mkv", "mov"])
+    if st.button("⬆️ Process Upload") and local_file:
+        fn = f"local_{local_file.name}"
         with open(fn, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+            f.write(local_file.getbuffer())
         st.session_state.library.append({"file": fn, "show": show_name, "cast": cast_input, "pov": pov_hero})
         st.rerun()
 
-# --- 5. THE AI PRODUCTION ENGINE ---
+# --- 5. STREAMING PRODUCTION ENGINE (65K TOKENS) ---
 for idx, item in enumerate(st.session_state.library):
     with st.container(border=True):
-        st.write(f"🎞️ **{item['file']}** | **POV:** {item['pov']}")
+        st.write(f"🎞️ **Source:** {item['file']} | **POV Target:** {item['pov']}")
         
-        if st.button("✨ Start High-Accuracy Production", key=f"ai_{idx}"):
-            with st.status("🧠 Gemini 3 Pro is processing with expanded tokens..."):
+        if st.button("✨ Run High-Accuracy Production", key=f"ai_{idx}"):
+            res_area = st.empty() # Placeholder for streaming text
+            full_text = ""
+            
+            with st.status("🧠 Gemini 3 Pro is processing..."):
                 try:
-                    # ✅ FIXED: SDK 2026 file upload parameter 'file='
-                    file_upload = client.files.upload(file=item['file'])
-                    while file_upload.state == "PROCESSING":
+                    # Upload
+                    file_up = client.files.upload(file=item['file'])
+                    while file_up.state == "PROCESSING":
                         time.sleep(3)
-                        file_upload = client.files.get(name=file_upload.name)
+                        file_up = client.files.get(name=file_up.name)
 
-                    # ✅ FIXED: 2026 Search Tool Syntax
-                    search_tool = types.Tool(google_search=types.GoogleSearch())
-
-                    # ✅ EXPANDED TOKENS (65.5k for the 24-minute verbatim script)
+                    # Config with 65k output limit and Search Tool
                     config = types.GenerateContentConfig(
                         max_output_tokens=65000,
-                        temperature=0.8,
-                        tools=[search_tool]
+                        temperature=0.7,
+                        tools=[types.Tool(google_search=types.GoogleSearch())]
                     )
 
                     prompt = f"""
-                    1. SEARCH GOOGLE: Research 'Wizards Beyond Waverly Place' episode recaps and the official Wiki. 
-                    Ensure names like Roman, Billie, and Giada are accurately identified.
-                    2. VIDEO ANALYSIS: Watch the video. 
-                    3. TASK A: FULL VERBATIM TRANSCRIPT. Identify characters from list: {item['cast']}.
-                    4. TASK B: DEEP POV NOVEL. Write a long, immersive 1st-person chapter from {item['pov']}'s POV.
+                    1. Research '{item['show']}' and character list: {item['cast']} via Google Search.
+                    2. Watch the video.
+                    3. TASK 1: FULL VERBATIM TRANSCRIPT. Word-for-word. Identify: {item['cast']}.
+                    4. TASK 2: DEEP POV NOVEL. Write a long chapter from {item['pov']}'s POV.
                     
-                    Format your response with these tags:
-                    [TRANSCRIPT] ... [END_TRANSCRIPT]
-                    [NOVEL] ... [END_NOVEL]
+                    Use these markers exactly:
+                    [TRANSCRIPT]
+                    [END_TRANSCRIPT]
+                    [NOVEL]
+                    [END_NOVEL]
                     """
 
+                    # STREAMING to avoid the 400 'Length too long' error
                     response = client.models.generate_content(
                         model=MODEL_ID,
-                        contents=[file_upload, prompt],
-                        config=config
+                        contents=[file_up, prompt],
+                        config=config,
+                        stream=True
                     )
-                    st.session_state[f"res_{idx}"] = response.text
+                    
+                    for chunk in response:
+                        full_text += chunk.text
+                        res_area.write(f"✍️ Streaming Output: {len(full_text.split())} words generated...")
+
+                    st.session_state[f"res_{idx}"] = full_text
+                    st.success("✅ Content Generated!")
+                    st.rerun()
+
                 except Exception as e:
                     st.error(f"AI Error: {e}")
 
-        # --- 6. SEPARATE BOXES & DOWNLOADS ---
+        # --- 6. DISPLAY & DOWNLOAD ---
         if f"res_{idx}" in st.session_state:
-            res = st.session_state[f"res_{idx}"]
+            raw = st.session_state[f"res_{idx}"]
             try:
-                t = res.split("[TRANSCRIPT]")[1].split("[END_TRANSCRIPT]")[0].strip()
-                n = res.split("[NOVEL]")[1].split("[END_NOVEL]")[0].strip()
+                t = raw.split("[TRANSCRIPT]")[1].split("[END_TRANSCRIPT]")[0].strip()
+                n = raw.split("[NOVEL]")[1].split("[END_NOVEL]")[0].strip()
             except:
-                t, n = res, "Check transcript box for full raw output."
+                t, n = raw, "Check Transcript box for full raw data."
 
-            col_t, col_n = st.columns(2)
-            with col_t:
+            c1, c2 = st.columns(2)
+            with c1:
                 st.subheader("📜 Verbatim Transcript")
-                st.text_area("T-Box", t, height=450, key=f"tbox_{idx}")
-                # SEPARATE DOWNLOAD 1
-                st.download_button("📥 Download Transcript (.docx)", 
-                                   create_docx(t, "Full Transcript"), 
-                                   file_name=f"Transcript_{idx}.docx")
+                st.text_area("T-Box", t, height=500, key=f"t_{idx}")
+                st.download_button("📥 Save Transcript", create_docx(t, "Transcript"), file_name=f"Transcript_{idx}.docx")
             
-            with col_n:
-                st.subheader(f"📖 {item['pov']}'s Novel")
-                st.text_area("N-Box", n, height=450, key=f"nbox_{idx}")
-                # SEPARATE DOWNLOAD 2
-                st.download_button("📥 Download Novel (.docx)", 
-                                   create_docx(n, f"Novel Chapter: {item['pov']} POV"), 
-                                   file_name=f"Novel_{item['pov']}.docx")
+            with c2:
+                st.subheader(f"📖 {item['pov']}'s POV Novel")
+                st.text_area("N-Box", n, height=500, key=f"n_{idx}")
+                st.download_button("📥 Save Novel", create_docx(n, f"{item['pov']} POV"), file_name=f"Novel_{item['pov']}.docx")
