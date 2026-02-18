@@ -13,8 +13,12 @@ import shutil
 # ==================== CORE SETUP ====================
 st.set_page_config(page_title="POV Studio 2026", layout="wide", page_icon="🎬")
 
-# Try to use Gemini 3 Pro Preview, fallback to Flash if not available
-MODEL_ID = "gemini-2.0-flash-exp"  # Gemini 3 Pro Preview may not be publicly available yet
+# Use the actual available Gemini model (checked Feb 2026)
+# Priority: Latest thinking model > Flash > Pro 1.5
+MODEL_ID = "gemini-2.0-flash-thinking-exp-01-21"  # Latest experimental model with thinking
+# Fallbacks if above doesn't work:
+# "gemini-1.5-flash-002"  # Stable, fast
+# "gemini-1.5-pro-002"    # More capable
 
 # Session State
 if "library" not in st.session_state:
@@ -67,14 +71,42 @@ def playon_style_record(url, cookies_file=None):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"dvr_rec_{timestamp}.mp4"
     
-    # PlayOn-style command: Best quality, fast download
+    # First, list all available formats to find the longest video (full episode, not trailer)
+    st.write("🔍 Analyzing available videos...")
+    
+    list_cmd = ["yt-dlp", "--list-formats", "--no-warnings", url]
+    if cookies_file:
+        cookies_path = "temp_cookies.txt"
+        with open(cookies_path, "wb") as f:
+            f.write(cookies_file.getbuffer())
+        list_cmd.extend(["--cookies", cookies_path])
+    
+    try:
+        # Get format list
+        list_result = subprocess.run(
+            list_cmd,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        # Show what was found
+        if "duration" in list_result.stdout.lower():
+            st.text("Available videos found:")
+            format_lines = [line for line in list_result.stdout.split('\n') 
+                          if 'mp4' in line.lower() or 'duration' in line.lower()]
+            st.code('\n'.join(format_lines[:10]))  # Show first 10 formats
+    except:
+        pass  # Continue even if listing fails
+    
+    # PlayOn-style download command with duration filter
     cmd = [
         "yt-dlp",
         "--newline",
         "--no-playlist",
         "--no-warnings",
-        # High quality format
-        "-f", "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        # CRITICAL: Only download videos longer than 10 minutes (filters out trailers)
+        "-f", "(bestvideo[duration>600][ext=mp4]+bestaudio[ext=m4a])/(best[duration>600][ext=mp4])/(bestvideo[ext=mp4]+bestaudio[ext=m4a])/best",
         "--merge-output-format", "mp4",
         # Speed optimizations (like PlayOn)
         "--concurrent-fragments", "4",  # Download 4 chunks at once
@@ -202,6 +234,17 @@ with st.sidebar:
             st.caption("Add 'ffmpeg' to packages.txt")
         else:
             st.success("✅ Ready to record!")
+    
+    # AI Model status
+    with st.expander("🤖 AI Model Check"):
+        if client:
+            st.caption("Will try these Gemini models in order:")
+            st.code("""1. gemini-2.0-flash-thinking-exp-01-21
+2. gemini-1.5-flash-002
+3. gemini-1.5-pro-002""")
+            st.success("✅ API key configured")
+        else:
+            st.error("❌ No Gemini API client")
 
 # ==================== MAIN UI ====================
 st.title(f"🎬 {show_name} Production Studio")
@@ -401,11 +444,26 @@ else:
                         
                         # Configure for 65K tokens
                         st.write("✍️ Generating transcript and POV novel...")
-                        config = types.GenerateContentConfig(
-                            max_output_tokens=65000,
-                            temperature=0.7,
-                            tools=[types.Tool(google_search=types.GoogleSearch())]
-                        )
+                        
+                        # Try multiple models in case one fails
+                        models_to_try = [
+                            "gemini-2.0-flash-thinking-exp-01-21",  # Latest with thinking
+                            "gemini-1.5-flash-002",                  # Stable fallback
+                            "gemini-1.5-pro-002",                    # More capable fallback
+                        ]
+                        
+                        response_generated = False
+                        last_error = None
+                        
+                        for model_name in models_to_try:
+                            try:
+                                st.write(f"🤖 Trying model: {model_name}...")
+                                
+                                config = types.GenerateContentConfig(
+                                    max_output_tokens=65000,
+                                    temperature=0.7,
+                                    tools=[types.Tool(google_search=types.GoogleSearch())]
+                                )
                         
                         # Enhanced prompt for long POV chapters (2500+ words)
                         prompt = f"""You are a professional TV script writer and novelist.
@@ -462,19 +520,36 @@ Use these exact markers:
 
 Remember: The novel chapter MUST be at least 2500 words. Use all available tokens to create a rich, detailed narrative."""
                         
-                        # Streaming generation
-                        response = client.models.generate_content_stream(
-                            model=MODEL_ID,
-                            contents=[file_up, prompt],
-                            config=config
-                        )
+                                # Streaming generation with current model
+                                response = client.models.generate_content_stream(
+                                    model=model_name,
+                                    contents=[file_up, prompt],
+                                    config=config
+                                )
+                                
+                                # Collect chunks
+                                for chunk in response:
+                                    if hasattr(chunk, 'text') and chunk.text:
+                                        full_response += chunk.text
+                                        word_count = len(full_response.split())
+                                        res_area.write(f"✍️ Generating... {word_count:,} words")
+                                
+                                # Success!
+                                response_generated = True
+                                st.success(f"✅ Used model: {model_name}")
+                                break  # Exit loop on success
+                                
+                            except Exception as model_error:
+                                last_error = str(model_error)
+                                if "404" in last_error or "NOT_FOUND" in last_error:
+                                    st.warning(f"⚠️ Model {model_name} not available, trying next...")
+                                    continue  # Try next model
+                                else:
+                                    # Other error, stop trying
+                                    raise
                         
-                        # Collect chunks
-                        for chunk in response:
-                            if hasattr(chunk, 'text') and chunk.text:
-                                full_response += chunk.text
-                                word_count = len(full_response.split())
-                                res_area.write(f"✍️ Generating... {word_count:,} words")
+                        if not response_generated:
+                            raise Exception(f"All models failed. Last error: {last_error}")
                         
                         # Save
                         st.session_state[f"res_{idx}"] = full_response
