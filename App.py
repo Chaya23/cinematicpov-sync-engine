@@ -13,12 +13,9 @@ import shutil
 # ==================== CORE SETUP ====================
 st.set_page_config(page_title="POV Studio 2026", layout="wide", page_icon="🎬")
 
-# Use the actual available Gemini model (checked Feb 2026)
-# Priority: Latest thinking model > Flash > Pro 1.5
-MODEL_ID = "gemini-2.0-flash-thinking-exp-01-21"  # Latest experimental model with thinking
-# Fallbacks if above doesn't work:
-# "gemini-1.5-flash-002"  # Stable, fast
-# "gemini-1.5-pro-002"    # More capable
+# UPDATED: Use the latest Gemini 2.0 models (Standard & Thinking)
+# Priority: Flash 2.0 (Fast/Stable) > Thinking (Creative) > Pro 1.5 (Fallback)
+MODEL_ID = "gemini-2.0-flash" 
 
 # Session State
 if "library" not in st.session_state:
@@ -239,16 +236,16 @@ with st.sidebar:
     with st.expander("🤖 AI Model Check"):
         if client:
             st.caption("Will try these Gemini models in order:")
-            st.code("""1. gemini-2.0-flash-thinking-exp-01-21
-2. gemini-1.5-flash-002
-3. gemini-1.5-pro-002""")
+            st.code("""1. gemini-2.0-flash
+2. gemini-2.0-flash-thinking-exp
+3. gemini-1.5-pro""")
             st.success("✅ API key configured")
         else:
             st.error("❌ No Gemini API client")
 
 # ==================== MAIN UI ====================
 st.title(f"🎬 {show_name} Production Studio")
-st.caption("PlayOn-Style Recording + AI Production Pipeline")
+st.caption("PlayOn-Style Recording + Gemini 2.0 AI Pipeline")
 
 # Recording tabs
 tab1, tab2, tab3 = st.tabs([
@@ -417,7 +414,7 @@ else:
             
             # AI Processing button
             if st.button(
-                f"✨ Run AI Production (65K Tokens)",
+                f"✨ Run AI Production (Gemini 2.0)",
                 key=f"run_{idx}",
                 use_container_width=True,
                 type="primary"
@@ -425,7 +422,7 @@ else:
                 res_area = st.empty()
                 full_response = ""
                 
-                with st.status("🧠 Gemini AI Processing...", expanded=True) as ai_status:
+                with st.status("🧠 Gemini 2.0 Processing...", expanded=True) as ai_status:
                     try:
                         # Upload
                         st.write("📤 Uploading video to Gemini...")
@@ -445,11 +442,11 @@ else:
                         # Configure for 65K tokens
                         st.write("✍️ Generating transcript and POV novel...")
                         
-                        # Try multiple models in case one fails
+                        # UPDATED MODEL LIST: Prioritize Gemini 2.0
                         models_to_try = [
-                            "gemini-2.0-flash-thinking-exp-01-21",  # Latest with thinking
-                            "gemini-1.5-flash-002",                  # Stable fallback
-                            "gemini-1.5-pro-002",                    # More capable fallback
+                            "gemini-2.0-flash",               # Latest Stable V2 (Fast & Capable)
+                            "gemini-2.0-flash-thinking-exp",  # Thinking model (Great for Novels)
+                            "gemini-1.5-pro",                 # Fallback (Robust)
                         ]
                         
                         response_generated = False
@@ -465,8 +462,8 @@ else:
                                     tools=[types.Tool(google_search=types.GoogleSearch())]
                                 )
                         
-                        # Enhanced prompt for long POV chapters (2500+ words)
-                        prompt = f"""You are a professional TV script writer and novelist.
+                                # Enhanced prompt for long POV chapters
+                                prompt = f"""You are a professional TV script writer and novelist.
 
 **CONTEXT:**
 - Show: {item['show']}
@@ -545,8 +542,8 @@ Remember: The novel chapter MUST be at least 2500 words. Use all available token
                                     st.warning(f"⚠️ Model {model_name} not available, trying next...")
                                     continue  # Try next model
                                 else:
-                                    # Other error, stop trying
-                                    raise
+                                    st.warning(f"⚠️ Error with {model_name}: {model_error}")
+                                    continue
                         
                         if not response_generated:
                             raise Exception(f"All models failed. Last error: {last_error}")
@@ -645,5 +642,4 @@ Remember: The novel chapter MUST be at least 2500 words. Use all available token
 
 # ==================== FOOTER ====================
 st.markdown("---")
-st.caption("🎬 POV Studio 2026 | PlayOn-Style Recording + Gemini AI (65K Tokens)")
-st.caption("📡 Direct Stream Download (No Screen Capture) | 📖 2500+ Word POV Chapters")
+st.caption("🎬 POV Studio 2026 | PlayOn-Style Recording + Gemini 2.0 AI (65K Tokens)")
