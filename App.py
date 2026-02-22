@@ -7,134 +7,101 @@ import subprocess
 from google import genai
 from google.genai import types
 
-# --- 2026 FLAGSHIP CONFIG ---
+# --- 2026 CONFIG ---
 MODEL_NAME = "gemini-3.1-pro-preview" 
-
-api_key = os.environ.get("GEMINI_API_KEY")
-if not api_key:
-    st.error("🔑 Set API key: export GEMINI_API_KEY='your-key'")
-    st.stop()
-
-client = genai.Client(api_key=api_key)
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 @st.cache_resource
-def load_whisper_model():
+def load_whisper():
     return whisper.load_model("turbo")
-
-whisper_model = load_whisper_model()
 
 def extract_audio(video_path):
     audio_path = f"{video_path}_audio.mp3"
-    subprocess.run([
-        "ffmpeg", "-i", video_path, "-vn", "-acodec", "libmp3lame",
-        "-ac", "1", "-ar", "16000", "-b:a", "32k", audio_path, "-y"
-    ], capture_output=True, check=True)
+    subprocess.run(["ffmpeg", "-i", video_path, "-vn", "-acodec", "libmp3lame", "-ac", "1", "-ar", "16000", "-b:a", "32k", audio_path, "-y"], capture_output=True)
     return audio_path
 
-def transcribe_with_whisper(audio_path):
-    st.write("🎤 Transcribing with Whisper Turbo...")
-    result = whisper_model.transcribe(audio_path, beam_size=1, temperature=0.0)
-    return result['text']
-
-def process_production(uploaded_file, pov_character, show_name, thinking_level):
-    temp_video_path = None
-    if uploaded_file:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tfile:
-            tfile.write(uploaded_file.read())
-            temp_video_path = tfile.name
+def process_production(uploaded_file, pov_character, show_name, episode_info, thinking_level):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tfile:
+        tfile.write(uploaded_file.read())
+        temp_video_path = tfile.name
     
     try:
-        # STEP 1: RESEARCH PHASE (Fixed Search Syntax)
-        st.write(f"🔍 Grounding with Google Search...")
-        search_config = types.GenerateContentConfig(
-            tools=[types.Tool(google_search=types.GoogleSearch())]
-        )
-        research_query = f"Provide a detailed plot recap for '{show_name}' Episode 3. Find specific subplots: Spelling Bee and Milo's outfits (scuba gear)."
-        research_response = client.models.generate_content(
-            model=MODEL_NAME, contents=research_query, config=search_config
-        )
-        lore_context = research_response.text
-
-        with st.sidebar:
-            st.success("✅ Context Grounded")
-            with st.expander("👁️ Review Lore"):
-                st.write(lore_context)
-
-        # STEP 2: WHISPER TRANSCRIPTION
+        # 1. WHISPER (LINE-BY-LINE MODE)
+        st.write("🎤 Transcribing line-by-line...")
         audio_path = extract_audio(temp_video_path)
-        transcript_text = transcribe_with_whisper(audio_path)
-        
-        # STEP 3: VIDEO UPLOAD (Argument Fix: 'file' instead of 'path')
-        st.write("☁️ Uploading to Gemini 3.1 Pro...")
-        video_file = client.files.upload(file=temp_video_path) # FIX: keyword is 'file'
-        
-        # Proper 2026 State Check
+        w_model = load_whisper()
+        # Return segments for frame-by-frame accuracy
+        result = w_model.transcribe(audio_path, verbose=False)
+        transcript_lines = [f"[{round(s['start'], 1)}s] {s['text']}" for s in result['segments']]
+        raw_transcript = "\n".join(transcript_lines)
+
+        # 2. LORE GROUNDING
+        st.write("🔍 Searching for Genie/Fashion Clues...")
+        search_config = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
+        research_response = client.models.generate_content(
+            model=MODEL_NAME, 
+            contents=f"Recap '{show_name}' {episode_info}. Mention Billie's scuba suit and the Roman/Genie lamp theory clues.",
+            config=search_config
+        )
+        lore = research_response.text
+
+        # 3. VIDEO ANALYSIS
+        st.write("☁️ Uploading Video...")
+        video_file = client.files.upload(path=temp_video_path)
         while video_file.state.name == "PROCESSING":
             time.sleep(5)
             video_file = client.files.get(name=video_file.name)
-        
-        if video_file.state.name == "FAILED":
-            st.error("❌ Video processing failed on Google's side.")
-            return
 
-        st.success("✅ Video Active")
-
-        # STEP 4: GENERATION (With Thinking Config)
-        st.write(f"✍️ Writing {pov_character}'s Novel...")
+        # 4. FINAL PRODUCTION
+        st.write(f"✍️ Writing {pov_character}'s Novel & Detailed Script...")
         final_config = types.GenerateContentConfig(
-            temperature=0.5,
+            temperature=0.3,
             max_output_tokens=65000,
-            thinking_config=types.ThinkingConfig(
-                thinking_level=thinking_level 
-            ) if thinking_level != "OFF" else None
+            thinking_config=types.ThinkingConfig(thinking_level=thinking_level) if thinking_level != "OFF" else None
         )
 
-        prompt = f"""Use research: {lore_context}
-**SITCOM RULES:** Visualize the 3D set. Ignore cuts.
-**TRANSCRIPT:** {transcript_text[:8000]}
-**TASK:** 1. Generate [SCRIPT]. 2. Write [NOVEL] from {pov_character}'s POV. 
-Integrate the spelling bee stakes and Milo's scuba gear as found in the research.
-**FORMAT:** [SCRIPT]...[END_SCRIPT] [NOVEL]...[END_NOVEL]"""
+        prompt = f"""LORE: {lore}
+TRANSCRIPT: {raw_transcript[:10000]}
+TASK:
+1. [SCRIPT]: Create a line-by-line script. TAG EVERY CAMERA SHOT (e.g., [WIDE], [CU ROMAN]).
+2. [NOVEL]: Write a 5,000+ word chapter from {pov_character}'s POV. 
+   - Describe Billie's scuba suit and Roman's internal suspicion.
+3. [GENIE_LOG]: Identify any 'Genie' clues (lamps, gold objects, Roman's magic glitches).
+FORMAT: [SCRIPT]...[END_SCRIPT] [NOVEL]...[END_NOVEL] [GENIE_LOG]...[END_GENIE_LOG]"""
 
-        response = client.models.generate_content(
-            model=MODEL_NAME, contents=[prompt, video_file], config=final_config
-        )
+        response = client.models.generate_content(model=MODEL_NAME, contents=[prompt, video_file], config=final_config)
+        full_text = response.text
+
+        # 5. UI DISPLAY & PERSISTENCE
+        st.subheader("🏁 Production Result")
         
-        # DISPLAY
-        st.subheader("🏁 Production Complete")
-        output = response.text
-        if "[SCRIPT]" in output and "[NOVEL]" in output:
-            script = output.split("[SCRIPT]")[1].split("[END_SCRIPT]")[0].strip()
-            novel = output.split("[NOVEL]")[1].split("[END_NOVEL]")[0].strip()
-            c1, c2 = st.columns(2)
-            with c1:
-                st.text_area("Final Script", script, height=400)
-                st.download_button("📥 Script", script, "script.txt")
-            with c2:
-                st.text_area("POV Novel", novel, height=400)
-                st.download_button("📥 Novel", novel, f"{pov_character}_novel.txt")
-        else:
-            st.text_area("Full Output", output, height=500)
+        # SCRIPT TAB
+        script = full_text.split("[SCRIPT]")[1].split("[END_SCRIPT]")[0].strip()
+        novel = full_text.split("[NOVEL]")[1].split("[END_NOVEL]")[0].strip()
+        genie = full_text.split("[GENIE_LOG]")[1].split("[END_GENIE_LOG]")[0].strip()
 
-    except Exception as e:
-        st.error(f"❌ Error: {e}")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("### 📜 Shot-by-Shot Script")
+            st.text_area("Script Preview", script, height=300)
+            st.download_button("💾 Download .txt Script", script, "script.txt")
+        
+        with col2:
+            st.markdown(f"### 📖 {pov_character}'s Novel")
+            st.text_area("Novel Preview", novel, height=300)
+            st.download_button("💾 Download .txt Novel", novel, "novel.txt")
+
+        st.info(f"🧞 Genie Theory Analysis:\n{genie}")
+
     finally:
-        if temp_video_path and os.path.exists(temp_video_path):
-            os.remove(temp_video_path)
+        if os.path.exists(temp_video_path): os.remove(temp_video_path)
 
 # --- UI ---
-st.set_page_config(page_title="POV Engine 3.1", layout="wide")
-st.title("🎬 POV Cinematic Engine")
-
-with st.sidebar:
-    st.header("⚙️ Settings")
-    show_name = st.text_input("Show Name", "Wizards Beyond Waverly Place")
-    pov_character = st.text_input("POV Character", "Roman")
-    thinking_level = st.select_slider("🧠 Thinking Level", options=["OFF", "LOW", "MEDIUM", "HIGH"], value="MEDIUM")
-    st.info(f"Model: {MODEL_NAME}")
-
-uploaded = st.file_uploader("Upload Video", type=["mp4", "mov"])
-
-if st.button("🚀 Start Production", type="primary"):
-    if uploaded:
-        process_production(uploaded, pov_character, show_name, thinking_level)
+st.title("🎬 POV Cinematic Engine (Sync-Shot Edition)")
+show = st.text_input("Show", "Wizards Beyond Waverly Place")
+ep = st.text_input("Episode", "S01E03")
+char = st.text_input("POV", "Roman")
+lvl = st.select_slider("🧠 Reasoning", ["OFF", "LOW", "MEDIUM", "HIGH"], "MEDIUM")
+up = st.file_uploader("Upload MP4", type=["mp4"])
+if st.button("🚀 Start Production") and up:
+    process_production(up, char, show, ep, lvl)
